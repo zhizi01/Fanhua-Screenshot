@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import { Button as AButton, Dropdown as ADropdown, Menu as AMenu, MenuItem as AMenuItem, Tooltip as ATooltip } from 'ant-design-vue'
 import { ChevronDown, Copy, MonitorUp, Share2 } from 'lucide-vue-next'
 
@@ -14,13 +14,49 @@ const emit = defineEmits<{
   share: []
 }>()
 const open = ref(false)
+const shareOpen = ref(false)
+const shareTrigger = ref<{ $el?: HTMLElement }>()
+const shareMenuId = useId()
+let focusFrame = 0
 const busy = computed(() => !!props.copying || props.sharing)
-watch(() => props.disabled || busy.value, disabled => { if (disabled) open.value = false })
+watch(() => props.disabled || busy.value, disabled => { if (disabled) { open.value = false; shareOpen.value = false } })
+watch(open, value => { if (value) shareOpen.value = false })
+watch(shareOpen, value => { if (value) open.value = false; else cancelAnimationFrame(focusFrame) })
+watch(() => props.desktop, value => { if (!value) shareOpen.value = false })
 function choose(mode: 'png' | 'deskflow') {
   if (props.disabled || busy.value || (mode === 'deskflow' && !props.desktop)) return
   open.value = false
   emit('copy', mode)
 }
+function chooseLocalSend() {
+  if (props.disabled || busy.value || !props.desktop) return
+  shareOpen.value = false
+  emit('share')
+}
+function closeSharing(restoreFocus = false) {
+  shareOpen.value = false
+  if (restoreFocus) void nextTick(() => shareTrigger.value?.$el?.focus())
+}
+async function openSharingWithKeyboard() {
+  if (props.disabled || busy.value || !props.desktop) return
+  shareOpen.value = true
+  await nextTick()
+  cancelAnimationFrame(focusFrame)
+  focusSharingItem()
+}
+function focusSharingItem() {
+  if (!shareOpen.value || props.disabled || busy.value || !props.desktop) return
+  // Ant's portal can still be hidden after nextTick. Focus its native menu
+  // only once visible, rather than relying on the cloned component's ref.
+  const item = document.getElementById(shareMenuId)?.querySelector<HTMLElement>('[role="menuitem"]')
+  if (item?.getClientRects().length) item.focus()
+  else focusFrame = requestAnimationFrame(focusSharingItem)
+}
+function shareMenuKeydown(event: KeyboardEvent) {
+  event.stopPropagation()
+  if (event.key === 'Escape') { event.preventDefault(); closeSharing(true) }
+}
+onBeforeUnmount(() => cancelAnimationFrame(focusFrame))
 </script>
 
 <template>
@@ -43,9 +79,16 @@ function choose(mode: 'png' | 'deskflow') {
         </template>
       </ADropdown>
     </div>
-    <AButton class="localsend-action" size="small" type="text" :disabled="disabled || busy || !desktop" :loading="sharing" aria-label="通过 LocalSend 共享" :title="desktop ? '通过 LocalSend 共享，选择接收设备' : 'LocalSend 共享需在桌面版运行'" @click="emit('share')">
-      <template #icon><Share2 :size="15" /></template><span class="action-label">共享</span>
-    </AButton>
+    <ADropdown v-model:open="shareOpen" :trigger="['click']" placement="bottomRight" :disabled="disabled || busy || !desktop">
+      <AButton ref="shareTrigger" class="share-trigger" size="small" type="text" :disabled="disabled || busy || !desktop" :loading="sharing" aria-label="选择共享方式" aria-haspopup="menu" :aria-expanded="shareOpen" :title="desktop ? '选择共享方式' : '图片共享需在桌面版运行'" @keydown.down.prevent.stop="openSharingWithKeyboard" @keydown.esc.prevent.stop="closeSharing(true)">
+        <template #icon><Share2 :size="15" /></template><span class="action-label">共享</span><ChevronDown :size="11" />
+      </AButton>
+      <template #overlay>
+        <AMenu :id="shareMenuId" class="copy-menu share-menu" aria-label="共享方式" data-testid="share-menu" @keydown="shareMenuKeydown">
+          <AMenuItem key="localsend" :disabled="disabled || busy || !desktop" aria-label="通过LocalSend共享" @click="chooseLocalSend"><span class="copy-menu-content"><Share2 :size="14" /><span>通过LocalSend共享</span></span></AMenuItem>
+        </AMenu>
+      </template>
+    </ADropdown>
   </div>
 </template>
 
@@ -61,9 +104,10 @@ function choose(mode: 'png' | 'deskflow') {
 .share-actions .copy-primary{border-radius:4px 0 0 4px;padding-right:4px}
 .share-actions .copy-options{width:17px;min-width:17px;padding:0;border-radius:0 4px 4px 0}
 .copy-menu{min-width:260px;padding:4px;border:1px solid #e8e0ef;border-radius:6px}
+.share-menu{min-width:190px}
 .copy-menu :deep(.ant-dropdown-menu-item){padding:7px 8px;font-size:12px;border-radius:3px}
 .copy-menu-content{display:flex;align-items:center;gap:7px;width:100%;min-height:20px;color:#62536e;outline:none}
 .copy-menu-content:focus-visible{outline:1px solid #9d82c9;outline-offset:2px}
 .copy-menu-content small{margin-left:auto;padding-left:10px;color:#a093ad;font-size:10px;white-space:nowrap}
-@media(max-width:600px){.action-label{display:none}.share-actions .copy-primary,.share-actions .localsend-action{width:29px;padding:0}.share-actions .copy-options{width:15px;min-width:15px}.share-actions{gap:1px}}
+@media(max-width:600px){.action-label{display:none}.share-actions .copy-primary{width:29px;padding:0}.share-actions .share-trigger{width:34px;padding:0;gap:2px}.share-actions .copy-options{width:15px;min-width:15px}.share-actions{gap:1px}}
 </style>
