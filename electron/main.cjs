@@ -1,5 +1,5 @@
 'use strict'
-const { app, BrowserWindow, Menu, Tray, ipcMain, globalShortcut, desktopCapturer, screen, nativeImage, dialog, clipboard, ClipboardItem, session, utilityProcess } = require('electron')
+const { app, BrowserWindow, Menu, Tray, Notification, ipcMain, globalShortcut, desktopCapturer, screen, nativeImage, dialog, clipboard, ClipboardItem, session, utilityProcess } = require('electron')
 const path = require('node:path')
 const { randomUUID } = require('node:crypto')
 const { NativeHelper } = require('./native-helper.cjs')
@@ -10,6 +10,10 @@ const { createImageClipboard } = require('./image-clipboard.cjs')
 const { createLocalSendService } = require('./localsend.cjs')
 const { OPEN_EXTENSIONS, parseEditImageArgs, readPreviewFile } = require('./image-open.cjs')
 const { createPdfService } = require('./pdf.cjs')
+const { createSettingsStore } = require('./settings.cjs')
+const { createContextMenuService } = require('./context-menu.cjs')
+const { createStartupNotifier } = require('./startup-notification.cjs')
+const { createLoginItemService } = require('./login-item.cjs')
 const { selectionToPixels, intersectRect } = require('./geometry.cjs')
 
 app.setName('繁花有图')
@@ -25,11 +29,15 @@ const features = createFeatureHandlers({ app, dialog, nativeImage, clipboard, he
 const imageClipboard = createImageClipboard({ clipboard, ClipboardItem, nativeImage })
 const localSend = createLocalSendService({ app, dialog, nativeImage })
 const pdfService = createPdfService({ app, dialog })
+const contextMenu = createContextMenuService({ app })
+const settingsStore = createSettingsStore({ directory: app.getPath('userData'), contextMenu, onChanged: broadcastSettings })
+const loginItem = createLoginItemService({ app })
 const translation = createTranslationService({
   modelRoot: app.isPackaged ? path.join(process.resourcesPath, 'translation') : path.join(__dirname, '..', 'resources', 'translation'),
   forkProcess: (file, options) => utilityProcess.fork(file, [], options),
 })
-let dashboard = null
+let settingsWindow = null
+let startupNotifier = null
 let tray = null
 let captureSession = null
 let quitting = false
@@ -112,6 +120,10 @@ function makeWindow(view, options = {}) {
     }
     win.webContents.on('render-process-gone', discardOverlay)
     win.on('unresponsive', discardOverlay)
+  } else if (view === 'settings') {
+    const discardSettings = () => { if (!win.isDestroyed()) win.destroy() }
+    win.webContents.on('render-process-gone', discardSettings)
+    win.on('unresponsive', discardSettings)
   }
   return win
 }
@@ -125,20 +137,23 @@ async function loadView(win, view) {
   } else await win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { view } })
 }
 
-async function openDashboard() {
-  if (dashboard && !dashboard.isDestroyed()) {
-    if (dashboard.isMinimized()) dashboard.restore()
-    dashboard.show(); dashboard.focus()
+async function openSettings() {
+  if (quitting) return
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    if (settingsWindow.isMinimized()) settingsWindow.restore()
+    settingsWindow.show(); settingsWindow.focus()
     return
   }
-  dashboard = makeWindow('dashboard', { width: 560, height: 460, minWidth: 480, minHeight: 420, maximizable: false })
-  const win = dashboard
-  win.on('close', event => {
-    if (!quitting) { event.preventDefault(); win.hide() }
+  const work = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
+  const width = Math.min(660, work.width), height = Math.min(640, work.height)
+  settingsWindow = makeWindow('settings', {
+    width, height, minWidth: Math.min(480, work.width), minHeight: Math.min(420, work.height), maximizable: false,
+    x: Math.round(work.x + (work.width - width) / 2), y: Math.round(work.y + (work.height - height) / 2),
   })
-  win.on('closed', () => { if (dashboard === win) dashboard = null })
+  const win = settingsWindow
+  win.on('closed', () => { if (settingsWindow === win) settingsWindow = null })
   try {
-    await loadView(win, 'dashboard')
+    await loadView(win, 'settings')
     if (!win.isDestroyed()) { win.show(); win.focus() }
   } catch (error) {
     win.destroy()
@@ -154,29 +169,43 @@ function showError(error) {
 
 function updateTray() {
   if (!tray) return
-  tray.setToolTip(`繁花有图 · ${shortcutRegistered ? 'Alt + A 截图' : '快捷键被占用'}`)
+  tray.setToolTip(`繁花有图 · ${shortcutRegistered ? 'Alt + A 截图' : '快捷键未启用'}`)
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '开始截图', accelerator: SHORTCUT, click: () => void startCapture().catch(showError) },
-    { label: '设置…', click: () => void openDashboard().catch(showError) },
-    { label: '打开图片…', click: () => void openImage().catch(showError) },
+    { label: '设置…', click: () => void openSettings().catch(showError) },
+    { label: '打开图片 / PDF…', click: () => void openImage().catch(showError) },
     { type: 'separator' },
-    { label: shortcutRegistered ? 'Alt + A 已启用' : 'Alt + A 被占用 · 点击重试', enabled: !shortcutRegistered, click: registerShortcut },
+    { label: shortcutRegistered ? 'Alt + A 已启用' : 'Alt + A 未启用 · 点击重试', enabled: !shortcutRegistered, click: registerShortcut },
     { type: 'separator' },
     { label: '退出繁花有图', click: () => app.quit() },
   ]))
 }
 
 function registerShortcut() {
-  if (globalShortcut.isRegistered(SHORTCUT)) shortcutRegistered = true
-  else shortcutRegistered = globalShortcut.register(SHORTCUT, () => void startCapture().catch(showError))
+  try {
+    if (globalShortcut.isRegistered(SHORTCUT)) shortcutRegistered = true
+    else shortcutRegistered = globalShortcut.register(SHORTCUT, () => void startCapture().catch(showError))
+  } catch { shortcutRegistered = false }
   updateTray()
 }
 
-function appState() {
+function broadcastSettings(settings) {
+  for (const { win, view } of managedWindows.values()) {
+    if (['settings', 'preview'].includes(view) && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+      try { win.webContents.send('settings:changed', settings) } catch { /* Window closed during broadcast. */ }
+    }
+  }
+}
+
+async function appState() {
+  let contextMenuState
+  try { contextMenuState = await contextMenu.getState() }
+  catch (error) { contextMenuState = { available: false, enabled: false, registered: 0, total: 6, legacyMachine: false, conflict: false, reason: error instanceof Error ? error.message : '无法读取右键菜单状态' } }
+  const login = loginItem.getState()
   return {
     shortcut: SHORTCUT, shortcutRegistered,
-    launchAtLogin: app.isPackaged && process.platform === 'win32' ? app.getLoginItemSettings().openAtLogin : false,
-    version: app.getVersion(), platform: process.platform,
+    launchAtLogin: login.enabled, ...(login.reason ? { launchAtLoginReason: login.reason } : {}), version: app.getVersion(), platform: process.platform, isPackaged: app.isPackaged,
+    contextMenu: contextMenuState, ...(settingsStore.getError() ? { settingsError: settingsStore.getError() } : {}),
   }
 }
 
@@ -383,7 +412,7 @@ async function handleLaunch(argv, secondary = false) {
     const document = await readPreviewFile(file, nativeImage)
     if (captureSession) finishSession(captureSession)
     await openPreviewDocument(document, { editing: true })
-  } else if (secondary || argv.includes('--show-window')) await openDashboard()
+  } else if (secondary || argv.includes('--show-window') || argv.includes('--show-settings')) await openSettings()
 }
 
 function trustedHandler(channel, views, callback) {
@@ -413,19 +442,17 @@ function resizePreview(win, layout) {
 }
 
 function installIpc() {
-  const normal = ['dashboard', 'preview']
+  const normal = ['settings', 'preview']
   trustedHandler('app:state', normal, appState)
-  trustedHandler('app:dashboard', normal, openDashboard)
-  trustedHandler('app:quit', ['dashboard'], () => app.quit())
+  trustedHandler('app:settings', normal, openSettings)
+  trustedHandler('settings:get', normal, () => settingsStore.get())
+  trustedHandler('settings:update', ['settings'], (_win, patch) => settingsStore.update(patch))
+  trustedHandler('app:retry-shortcut', ['settings'], () => { registerShortcut(); return appState() })
+  trustedHandler('app:quit', ['settings'], () => app.quit())
   trustedHandler('window:hide', normal, win => win.hide())
   trustedHandler('window:minimize', normal, win => win.minimize())
   trustedHandler('window:close', normal, win => win.close())
-  trustedHandler('app:launch-at-login', ['dashboard'], (_win, enabled) => {
-    if (typeof enabled !== 'boolean') throw new Error('设置值无效')
-    if (!app.isPackaged || process.platform !== 'win32') throw new Error('开机启动请在安装后的 Windows 应用中设置')
-    app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath })
-    return app.getLoginItemSettings().openAtLogin
-  })
+  trustedHandler('app:launch-at-login', ['settings'], (_win, enabled) => loginItem.setEnabled(enabled))
   trustedHandler('capture:start', normal, startCapture)
   trustedHandler('capture:context', ['capture'], win => {
     const item = captures.get(win.webContents.id)
@@ -445,7 +472,7 @@ function installIpc() {
     const pixels = selectionToPixels(rect, item.display.bounds, item.image.getSize())
     const image = item.image.crop(pixels)
     finishSession(item.session)
-    await openPreview(image)
+    await openPreview(image, { editing: settingsStore.snapshot().captureOpenEditor })
   })
   trustedHandler('preview:get', ['preview'], win => {
     const data = previews.get(win.webContents.id)
@@ -472,11 +499,14 @@ function installIpc() {
   trustedHandler('pdf:cancel-save', ['preview'], (win, jobId) => pdfService.cancel(win, jobId))
   trustedHandler('image:copy', ['preview'], (_win, dataUrl, mode) => imageClipboard.copy(dataUrl, mode))
   trustedHandler('localsend:share', ['preview'], (win, dataUrl) => localSend.share(win, dataUrl))
+  trustedHandler('localsend:settings', ['settings'], () => localSend.getSettings())
+  trustedHandler('localsend:choose-executable', ['settings'], win => localSend.chooseExecutable(win))
+  trustedHandler('localsend:reset-executable', ['settings'], () => localSend.resetExecutable())
   trustedHandler('image:open', normal, openImage)
   trustedHandler('app:fonts', normal, (_win, refresh) => features.getFonts(refresh))
-  trustedHandler('ocr:capabilities', ['preview'], () => features.getOcrCapabilities())
+  trustedHandler('ocr:capabilities', normal, () => features.getOcrCapabilities())
   trustedHandler('ocr:recognize', ['preview'], (win, dataUrl, language) => features.recognizeText(win, dataUrl, language))
-  trustedHandler('translation:capabilities', ['preview'], () => translation.getCapabilities())
+  trustedHandler('translation:capabilities', normal, () => translation.getCapabilities())
   trustedHandler('translation:translate', ['preview'], (win, request) => translation.translate(request, {
     ownerId: win.webContents.id,
     onProgress: progress => {
@@ -495,28 +525,31 @@ function installIpc() {
 // Preserve the original flag/value pairs through Electron's additionalData.
 if (!app.requestSingleInstanceLock({ launchArgs: process.argv })) app.quit()
 else {
-  app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
-    const launchArgs = Array.isArray(additionalData?.launchArgs) ? additionalData.launchArgs : argv
-    void app.whenReady().then(() => handleLaunch(launchArgs, true)).catch(showError)
-  })
-  app.whenReady().then(async () => {
+  const readyForActions = app.whenReady().then(async () => {
     if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
     session.defaultSession.setPermissionCheckHandler(() => false)
+    await settingsStore.initialize()
     installIpc()
     void localSend.initialize().catch(() => { /* Sharing retries cleanup without blocking tray startup. */ })
     tray = new Tray(createIcon())
-    tray.on('double-click', () => void openDashboard().catch(showError))
+    tray.on('double-click', () => void openSettings().catch(showError))
     registerShortcut()
     void helper.start().catch(() => { /* Manual area capture remains available. */ })
     screen.on('display-removed', displaysChanged)
     screen.on('display-added', displaysChanged)
     screen.on('display-metrics-changed', displaysChanged)
     warmOverlays()
-    await handleLaunch(process.argv)
-  }).catch(showError)
+    startupNotifier = createStartupNotifier({ Notification, openSettings, icon: createIcon(), onError: error => console.warn('启动通知未显示:', error) })
+    startupNotifier.show({ enabled: settingsStore.snapshot().startupNotification, shortcutRegistered })
+  })
+  app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
+    const launchArgs = Array.isArray(additionalData?.launchArgs) ? additionalData.launchArgs : argv
+    void readyForActions.then(() => handleLaunch(launchArgs, true)).catch(showError)
+  })
+  void readyForActions.then(() => handleLaunch(process.argv)).catch(showError)
   app.on('window-all-closed', () => { /* Keep the tray and global shortcut alive. */ })
-  app.on('activate', () => void openDashboard().catch(showError))
+  app.on('activate', () => void readyForActions.then(openSettings).catch(showError))
   app.on('before-quit', event => {
     if (shutdownReady) return
     // Wait for an in-flight PDF write to close and remove its temporary file
@@ -524,6 +557,7 @@ else {
     event.preventDefault()
     if (quitting) return
     quitting = true
+    startupNotifier?.dispose()
     if (captureSession) finishSession(captureSession, false)
     helper.stop()
     clearTimeout(poolRefreshTimer)
@@ -532,6 +566,8 @@ else {
     globalShortcut.unregisterAll()
     if (tray) tray.destroy()
     tray = null
-    void pdfService.dispose().catch(console.error).finally(() => { shutdownReady = true; app.quit() })
+    void Promise.allSettled([pdfService.dispose(), settingsStore.dispose()]).then(results => {
+      for (const result of results) if (result.status === 'rejected') console.error(result.reason)
+    }).finally(() => { shutdownReady = true; app.quit() })
   })
 }

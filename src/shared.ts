@@ -25,9 +25,38 @@ export interface AppState {
   shortcut: string
   shortcutRegistered: boolean
   launchAtLogin: boolean
+  launchAtLoginReason?: string
   version: string
   platform: string
+  isPackaged: boolean
+  contextMenu: ContextMenuState
+  settingsError?: string
 }
+export interface ContextMenuState { available: boolean; enabled: boolean; registered: number; total: number; legacyMachine: boolean; conflict: boolean; reason?: string }
+export interface EditorPreferences {
+  font: string
+  size: number
+  color: string
+  markerStyle: 'number' | 'letter' | 'chinese'
+  markerHeadSize: number
+  arrowLineWidth: number
+  arrowHeadSize: number
+  shapeLineWidth: number
+  shapeBorderStyle: 'solid' | 'dashed' | 'dotted'
+  mosaicStrength: number
+}
+export interface AppSettings {
+  startupNotification: boolean
+  contextMenuEnabled: boolean
+  captureOpenEditor: boolean
+  ocrLanguage: string
+  translationDirection: TranslationDirection
+  imageFormat: ImageFormat | 'pdf'
+  imageQuality: number
+  pdfScope: 'all' | 'current'
+  editor: EditorPreferences
+}
+export type SettingsPatch = Partial<Omit<AppSettings, 'editor'>> & { editor?: Partial<EditorPreferences> }
 export type ImageFormat = 'png' | 'jpeg' | 'webp' | 'bmp'
 export interface ImageSaveOptions { format: ImageFormat; quality?: number }
 export interface ExportOptions { format: ImageFormat | 'pdf'; quality?: number; scope?: 'current' | 'all' }
@@ -73,8 +102,12 @@ export interface WatermarkConfig {
 export interface WatermarkPreset { id: string; name: string; config: WatermarkConfig; updatedAt: string }
 export interface DesktopAPI {
   getAppState(): Promise<AppState>
+  getSettings(): Promise<AppSettings>
+  updateSettings(patch: SettingsPatch): Promise<AppSettings>
+  onSettingsChanged(callback: (settings: AppSettings) => void): () => void
+  openSettings(): Promise<void>
+  retryShortcut(): Promise<AppState>
   startCapture(): Promise<void>
-  openDashboard(): Promise<void>
   hideWindow(): Promise<void>
   minimizeWindow(): Promise<void>
   closeWindow(): Promise<void>
@@ -96,6 +129,9 @@ export interface DesktopAPI {
   cancelPdfSave(jobId: string): Promise<void>
   copyImage(dataUrl: string, mode?: ImageCopyMode): Promise<ImageCopyResult>
   shareViaLocalSend(dataUrl: string): Promise<{ canceled: boolean; fileName?: string }>
+  getLocalSendSettings(): Promise<{ executable: string | null }>
+  chooseLocalSendExecutable(): Promise<{ executable: string | null } | null>
+  resetLocalSendExecutable(): Promise<{ executable: string | null }>
   openImage(): Promise<void>
   getFonts(refresh?: boolean): Promise<string[]>
   getOcrCapabilities(): Promise<OcrCapabilities>

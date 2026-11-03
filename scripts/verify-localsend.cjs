@@ -61,15 +61,29 @@ async function main() {
     let selections = 0
     const dialog = { showOpenDialog: async () => { selections++; return { canceled: false, filePaths: [executable] } } }
     const selected = createLocalSendService({ ...options, dialog, discover: async () => null })
-    await selected.share({}, png)
+    assert.deepEqual(await selected.getSettings(), { executable: null })
+    await assert.rejects(selected.share({}, png), /设置 → 共享/)
+    assert.equal(selections, 0, 'Sharing must not open the preferences picker')
+    assert.deepEqual(await selected.chooseExecutable({}), { executable })
     assert.equal(selections, 1)
     assert.equal(JSON.parse(await fs.readFile(path.join(userData, 'localsend.json'), 'utf8')).executable, executable)
     await createLocalSendService({ ...options, dialog: none, discover: async () => { throw Error('must use remembered program') } }).share({}, png)
+    await fs.rename(executable, `${executable}.moved`)
+    await assert.rejects(selected.share({}, png), /已失效/)
+    assert.deepEqual(await selected.getSettings(), { executable }, 'Stale manual paths stay visible for correction')
+    await fs.rename(`${executable}.moved`, executable)
+    assert.deepEqual(await selected.resetExecutable(), { executable: null })
+    await assert.rejects(selected.share({}, png), /设置 → 共享/)
+    await fs.writeFile(path.join(userData, 'localsend.json'), '{broken')
+    await assert.rejects(selected.getSettings(), /无法读取/)
+    await assert.rejects(selected.share({}, png), /无法读取/)
+    await selected.resetExecutable()
+    assert.deepEqual(await selected.getSettings(), { executable: null })
 
     const canceledApp = { getPath: name => path.join(fixture, `cancel-${name}`) }
     const canceled = createLocalSendService({ ...options, app: canceledApp, discover: async () => null, dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) } })
     const before = launches.length
-    assert.deepEqual(await canceled.share({}, png), { canceled: true })
+    assert.equal(await canceled.chooseExecutable({}), null)
     assert.equal(launches.length, before)
     await assert.rejects(fs.stat(canceledApp.getPath('temp')), { code: 'ENOENT' })
 
@@ -90,7 +104,7 @@ async function main() {
     release(executable)
     await pending
 
-    const report = { passed: true, shellFreePathArgument: true, pngBytesPreserved: true, existingInstanceExitAccepted: true, portablePathRemembered: true, canceledWithoutExport: true, failedLaunchRemovedFile: true, onlyExpiredOwnFilesCleaned: true, concurrentRequestsRejected: true }
+    const report = { passed: true, shellFreePathArgument: true, pngBytesPreserved: true, existingInstanceExitAccepted: true, portablePathRemembered: true, settingsOnlyPicker: true, stalePathReported: true, corruptSettingsReportedAndRecoverable: true, resetToAutomatic: true, canceledWithoutExport: true, failedLaunchRemovedFile: true, onlyExpiredOwnFilesCleaned: true, concurrentRequestsRejected: true }
     await fs.writeFile(path.join(artifacts, 'localsend-verification.json'), JSON.stringify(report, null, 2) + '\n')
     console.log(JSON.stringify(report))
   } finally {

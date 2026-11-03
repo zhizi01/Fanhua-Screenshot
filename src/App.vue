@@ -3,13 +3,13 @@ import { ConfigProvider as AConfigProvider } from 'ant-design-vue'
 import zhCN from 'ant-design-vue/es/locale/zh_CN'
 import { defineAsyncComponent } from 'vue'
 
-const route = new URLSearchParams(location.search).get('view') || 'dashboard'
+const route = new URLSearchParams(location.search).get('view') || 'settings'
 const views = {
-  dashboard: defineAsyncComponent(() => import('./views/DashboardView.vue')),
+  settings: defineAsyncComponent(() => import('./views/SettingsView.vue')),
   capture: defineAsyncComponent(() => import('./views/CaptureView.vue')),
   preview: defineAsyncComponent(() => import('./views/PreviewView.vue')),
 }
-const view = views[route as keyof typeof views] || views.dashboard
+const view = views[route as keyof typeof views] || views.settings
 </script>
 
 <template>

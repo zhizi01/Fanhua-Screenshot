@@ -93,6 +93,12 @@ function createLocalSendService({ app, dialog, nativeImage, platform = process.p
   const directory = path.resolve(app.getPath('temp'), 'fanhua-localsend')
   const settings = path.resolve(app.getPath('userData'), 'localsend.json')
   let busy = false
+  let settingsQueue = Promise.resolve()
+  function changeSettings(operation) {
+    const next = settingsQueue.then(operation)
+    settingsQueue = next.catch(() => {})
+    return next
+  }
 
   async function initialize() {
     await fs.mkdir(directory, { recursive: true })
@@ -109,29 +115,48 @@ function createLocalSendService({ app, dialog, nativeImage, platform = process.p
   }
 
   async function storedExecutable() {
+    let handle
     try {
-      if ((await fs.stat(settings)).size > 16 * 1024) return null
-      const value = JSON.parse(await fs.readFile(settings, 'utf8'))
-      if (value.version === 1 && await validExecutable(value.executable)) return value.executable
-    } catch { /* An invalid old setting must not block selecting the program. */ }
-    return null
+      handle = await fs.open(settings, 'r')
+      const stat = await handle.stat()
+      if (!stat.isFile() || stat.size > 16 * 1024) throw new Error('invalid settings')
+      const buffer = Buffer.alloc(16 * 1024 + 1)
+      let length = 0
+      while (length < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
+        if (!bytesRead) break
+        length += bytesRead
+      }
+      if (length > 16 * 1024) throw new Error('oversize settings')
+      const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, length)))
+      if (value.version !== 1 || typeof value.executable !== 'string' || !path.isAbsolute(value.executable) || !EXECUTABLE_NAME.test(path.basename(value.executable)) || /[\r\n\0]/.test(value.executable)) throw new Error('invalid path')
+      return value.executable
+    } catch (error) {
+      if (error.code === 'ENOENT') return null
+      throw new Error('无法读取已保存的 LocalSend 位置，请在设置 → 共享中重新选择程序或恢复自动查找')
+    } finally { await handle?.close().catch(() => {}) }
   }
 
   async function rememberExecutable(executable) {
     const temporary = `${settings}.${randomUUID()}.tmp`
+    let owned = false
     try {
       await fs.mkdir(path.dirname(settings), { recursive: true })
-      await fs.writeFile(temporary, JSON.stringify({ version: 1, executable }) + '\n', { flag: 'wx', encoding: 'utf8' })
+      const handle = await fs.open(temporary, 'wx')
+      owned = true
+      try { await handle.writeFile(JSON.stringify({ version: 1, executable }) + '\n', 'utf8'); await handle.sync() }
+      finally { await handle.close() }
       await fs.rename(temporary, settings)
-    } catch { /* Sharing still works if remembering the optional path fails. */ }
-    finally { await fs.unlink(temporary).catch(() => {}) }
+    } catch { throw new Error('无法保存 LocalSend 主程序位置，请检查设置目录权限后重试') }
+    finally { if (owned) await fs.unlink(temporary).catch(() => {}) }
   }
 
-  async function executableFor(win) {
-    const known = await storedExecutable() || await discover()
-    if (known && await validExecutable(known)) return known
+  async function getSettings() { return { executable: await storedExecutable() } }
+
+  async function chooseExecutable(win) {
+    if (platform !== 'win32') throw new Error('LocalSend 设置目前仅支持 Windows 桌面版')
     const selected = await dialog.showOpenDialog(win, {
-      title: '未找到 LocalSend，请选择已安装的 localsend_app.exe（取消可返回）',
+      title: '选择已安装的 LocalSend 主程序',
       buttonLabel: '使用 LocalSend', properties: ['openFile'],
       filters: [{ name: 'LocalSend 主程序', extensions: ['exe'] }],
     })
@@ -139,7 +164,24 @@ function createLocalSendService({ app, dialog, nativeImage, platform = process.p
     const file = path.resolve(selected.filePaths[0])
     if (!await validExecutable(file)) throw new Error('请选择 LocalSend 主程序 localsend_app.exe，而不是安装包或卸载程序')
     await rememberExecutable(file)
-    return file
+    return { executable: file }
+  }
+
+  async function resetExecutable() {
+    try { await fs.unlink(settings) }
+    catch (error) { if (error.code !== 'ENOENT') throw new Error('无法恢复 LocalSend 自动查找，请检查设置目录权限后重试') }
+    return { executable: null }
+  }
+
+  async function executableFor() {
+    const configured = await storedExecutable()
+    if (configured) {
+      if (await validExecutable(configured)) return configured
+      throw new Error('设置中的 LocalSend 主程序已失效，请在设置 → 共享中重新选择，或恢复自动查找')
+    }
+    const known = await discover()
+    if (known && await validExecutable(known)) return known
+    throw new Error('未找到 LocalSend，请先安装，或在设置 → 共享中选择已安装的主程序')
   }
 
   async function share(win, dataUrl) {
@@ -152,8 +194,7 @@ function createLocalSendService({ app, dialog, nativeImage, platform = process.p
       const bytes = decodePngDataUrl(dataUrl)
       const image = nativeImage.createFromBuffer(bytes)
       if (image.isEmpty()) throw new Error('共享图片解码失败')
-      const executable = await executableFor(win)
-      if (!executable) return { canceled: true }
+      const executable = await executableFor()
       if (win?.isDestroyed?.()) return { canceled: true }
       await initialize()
       const timestamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
@@ -168,7 +209,7 @@ function createLocalSendService({ app, dialog, nativeImage, platform = process.p
     } finally { busy = false }
   }
 
-  return { initialize, share }
+  return { initialize, share, getSettings, chooseExecutable: win => changeSettings(() => chooseExecutable(win)), resetExecutable: () => changeSettings(resetExecutable) }
 }
 
 module.exports = { createLocalSendService, discoverLocalSend, validExecutable, launchLocalSend }

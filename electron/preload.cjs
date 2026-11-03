@@ -4,8 +4,16 @@ const { contextBridge, ipcRenderer } = require('electron')
 // The renderer receives explicit capabilities, never ipcRenderer or Node APIs.
 contextBridge.exposeInMainWorld('fanhua', Object.freeze({
   getAppState: () => ipcRenderer.invoke('app:state'),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  updateSettings: patch => ipcRenderer.invoke('settings:update', patch),
+  onSettingsChanged: callback => {
+    const listener = (_event, settings) => callback(settings)
+    ipcRenderer.on('settings:changed', listener)
+    return () => ipcRenderer.removeListener('settings:changed', listener)
+  },
   startCapture: () => ipcRenderer.invoke('capture:start'),
-  openDashboard: () => ipcRenderer.invoke('app:dashboard'),
+  openSettings: () => ipcRenderer.invoke('app:settings'),
+  retryShortcut: () => ipcRenderer.invoke('app:retry-shortcut'),
   hideWindow: () => ipcRenderer.invoke('window:hide'),
   minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
   closeWindow: () => ipcRenderer.invoke('window:close'),
@@ -31,6 +39,9 @@ contextBridge.exposeInMainWorld('fanhua', Object.freeze({
   cancelPdfSave: jobId => ipcRenderer.invoke('pdf:cancel-save', jobId),
   copyImage: (dataUrl, mode) => ipcRenderer.invoke('image:copy', dataUrl, mode),
   shareViaLocalSend: dataUrl => ipcRenderer.invoke('localsend:share', dataUrl),
+  getLocalSendSettings: () => ipcRenderer.invoke('localsend:settings'),
+  chooseLocalSendExecutable: () => ipcRenderer.invoke('localsend:choose-executable'),
+  resetLocalSendExecutable: () => ipcRenderer.invoke('localsend:reset-executable'),
   openImage: () => ipcRenderer.invoke('image:open'),
   getFonts: refresh => ipcRenderer.invoke('app:fonts', refresh),
   getOcrCapabilities: () => ipcRenderer.invoke('ocr:capabilities'),
