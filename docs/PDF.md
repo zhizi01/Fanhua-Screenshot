@@ -4,7 +4,7 @@
 
 ## 使用
 
-打开图片的入口现在同时接受 PDF；安装版会增加 PDF 的“使用繁花有图编辑”右键菜单。程序已驻留时打开独立预览，不替换已有编辑窗口。
+托盘的“打开图片 / PDF”同时接受图片与 PDF；1.7.0 起，安装程序默认不添加右键菜单，可在设置中启用 PDF 的“使用繁花有图编辑”入口。程序已驻留时打开独立预览，不替换已有编辑窗口。
 
 页栏支持上一页、下一页和跳转。每页独立保留标注、水印、历史和保存状态；关闭预览会丢弃未保存编辑。OCR、翻译、复制和 LocalSend 作用于当前页。翻页清空旧识别结果，识别面板开启时自动处理最新页面。
 
@@ -40,8 +40,8 @@ npm run test:pdf:service
 npm run test:pdf:renderer
 npm run build
 npm run test:pdf
-node scripts/verify-pdf-ui.cjs "release/1.6.0/win-unpacked/繁花有图.exe"
-node scripts/verify-windows-integration.cjs "release/1.6.0/win-unpacked/繁花有图.exe"
+node scripts/verify-pdf-ui.cjs "release/1.7.0/win-unpacked/繁花有图.exe"
+node scripts/verify-windows-integration.cjs "release/1.7.0/win-unpacked/繁花有图.exe"
 node scripts/verify-pdf-assets.cjs
 ```
 

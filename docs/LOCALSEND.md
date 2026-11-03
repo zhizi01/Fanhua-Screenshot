@@ -18,8 +18,8 @@ Windows 版 LocalSend 支持直接接收文件路径参数：
 
 - `electron/localsend.cjs` 提供 `createLocalSendService({ app, dialog, nativeImage })`，主进程在 Electron 就绪后调用 `initialize()`，预览窗口共享时调用 `share(window, composedPngDataUrl)`。
 - 共享输入仅接受编辑器合成后的 PNG Data URL，校验格式、尺寸及解码结果。不会接收渲染进程传入的任意本地文件路径。
-- 优先复用用户手动指定并仍有效的程序路径，再查询正在运行的 LocalSend 进程、注册表 App Paths、卸载登记、右键菜单登记及常见安装目录。路径识别失败时，提示选择 `localsend_app.exe`；便携版可以手动选择，取消即返回，不创建共享图片。
-- 手动选中的路径保存在 Electron 用户数据目录的 `localsend.json`。验证绝对路径、预期文件名、普通文件及可执行文件头；这不等同于数字签名验证，用户应选择自己安装的 LocalSend 主程序。
+- 默认查询正在运行的 LocalSend 进程、注册表 App Paths、卸载登记、右键菜单登记及常见安装目录。在“设置 → 共享”可以指定 `localsend_app.exe` 或恢复自动查找；设置时选择取消不产生共享图片。手动路径优先，失效时保留并明确提示修正；共享期间不弹出配置文件选择器，未发现程序时指向设置。
+- 手动选中的路径保存在 Electron 用户数据目录的 `localsend.json`。设置专用 IPC 与预览共享 IPC 分离；手动路径变更串行执行，原子保存并报告写入失败。验证绝对路径、预期文件名、普通文件及可执行文件头；这不等同于数字签名验证，用户应选择自己安装的 LocalSend 主程序。
 - 使用 `spawn(absoluteExecutable, [absolutePngPath])`，关闭 shell，不拼接命令字符串。含空格、中文或 `&` 的文件路径按单个参数传递。已有实例交接后子进程正常退出视为成功；启动失败则显示错误。
 - 共享接口返回 `{ canceled: false, fileName }` 或 `{ canceled: true }`。成功只表示程序已启动或完成实例交接，无法从这个公开入口获得用户是否最终发送、接收方是否确认等结果。
 - 当前集成针对 Windows 桌面版，不会自动安装 LocalSend。

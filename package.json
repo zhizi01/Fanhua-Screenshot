@@ -1,6 +1,6 @@
 {
   "name": "fanhua-screenshot",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": true,
   "os": [
     "win32"
@@ -33,6 +33,11 @@
     "test:pdf": "node scripts/verify-pdf-ui.cjs",
     "test:pdf:service": "node scripts/verify-pdf-service.cjs",
     "test:pdf:renderer": "node scripts/verify-pdf-renderer.cjs",
+    "test:settings": "node scripts/verify-settings-ui.cjs",
+    "test:settings:service": "node scripts/verify-settings-service.cjs",
+    "test:startup-notification": "node scripts/verify-startup-notification.cjs",
+    "test:login-item": "node scripts/verify-login-item.cjs",
+    "test:context-menu:service": "node scripts/verify-context-menu-service.cjs",
     "pdf:prepare": "node scripts/prepare-pdf-assets.mjs",
     "models:prepare": "node scripts/prepare-translation-models.mjs",
     "models:check": "node scripts/prepare-translation-models.mjs --check",

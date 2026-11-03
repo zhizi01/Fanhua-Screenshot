@@ -2,9 +2,9 @@
 
 ## 桌面交互
 
-1.6.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，译文同步覆盖原图识别区域；保存格式和水印使用就地弹窗，复制和共享使用紧凑下拉菜单。图片支持 Windows 资源管理器入口和画布内部的右键菜单。
+1.7.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，译文同步覆盖原图识别区域；保存格式和水印使用就地弹窗，复制和共享使用紧凑下拉菜单。图片支持 Windows 资源管理器入口和画布内部的右键菜单。
 
-内部路由沿用 `dashboard`、`capture`、`preview` 三个值。其中 `dashboard` 对应设置窗口，不是页面导航式工作台。
+内部路由仅有 `settings`、`capture`、`preview`，删除 Dashboard 组件和 IPC。常规启动不创建设置窗口；托盘菜单、双击托盘、重复启动或编辑器齿轮按需创建／聚焦同一个设置窗口。
 
 ## 进程职责
 
@@ -18,7 +18,8 @@
 | 图片复制与共享 | `src/components/ShareActions.vue`、`electron/image-clipboard.cjs`、`electron/localsend.cjs` | PNG／DeskFlow JPEG 复制、格式校验、LocalSend 查找和合成图片交接。 |
 | 预加载桥 | `electron/preload.cjs` | 通过 `contextBridge` 暴露明确的 `window.fanhua` 方法。 |
 | 共享类型 | `src/shared.ts` | 截图上下文、窗口矩形、图片信息和桌面 API 契约。 |
-| 设置视图 | `src/views/DashboardView.vue` | 截图入口、打开图片、启动设置、快捷键状态。 |
+| 设置视图 | `src/views/SettingsView.vue` | 启动与系统集成、编辑默认值、保存与识别、LocalSend 路径。 |
+| 全局偏好 | `electron/settings.cjs`、`context-menu.cjs`、`startup-notification.cjs` | 原子持久化、用户主动注册右键、启动系统通知。 |
 | 截图遮罩 | `src/views/CaptureView.vue` | 窗口命中、悬停高亮、框选、确认和取消。 |
 | 预览编辑 | `src/views/PreviewView.vue`、`src/editor/` | 原图坐标中的标注、箭头端点、矩形／椭圆控制点、缩放锚点、文档历史和导出。 |
 | OCR 段落栏 | `src/components/OcrSidebar.vue`、`src/ocr/regions.ts` | 段落选择、编辑复制、列表定位、识别坐标校验和图片位置联动。 |
@@ -30,13 +31,17 @@
 | 翻译界面状态 | `src/services/translation.ts` | 翻译方向、段落原文版本、进度、取消、过期结果隔离及译文保留。 |
 | 离线翻译服务 | `electron/translation.cjs`、`translation-worker.cjs`、`translation-text.cjs` | 本地模型检查、任务互斥、CPU 推理、长段切分、超时与子进程释放。 |
 
-窗口关闭时删除关联截图数据。设置窗口的关闭操作改为隐藏；最后一个窗口关闭后，托盘和快捷键仍保留。只有显式退出程序才释放全局快捷键、停止原生服务并退出。
+窗口关闭时删除关联截图数据。设置窗口关闭时销毁，重新打开时从持久化设置恢复；最后一个窗口关闭后，托盘和快捷键仍保留。只有显式退出程序才释放全局快捷键、停止原生服务并退出。
 
 `setPreviewLayout({ editing, ocr })` 统一调整预览窗口最低尺寸。仅编辑为 760 × 500，仅识别为 720 × 500，同时开启为 1040 × 540；实际尺寸受当前显示器工作区限制。关闭侧栏后降低最小尺寸，不强制缩小用户已调整的窗口。图片、编辑属性和 OCR 段落栏位于同一工作区，段落列表独立滚动。
 
 ## 图片右键入口
 
-NSIS `customInstall` 在 `Software\Classes\SystemFileAssociations\.<扩展名>\shell\FanhuaScreenshot.Edit` 注册 PNG、JPG、JPEG、WebP、BMP、PDF 六种扩展，命令为带引号的程序路径与 `--edit-image "%1"`。注册表根使用 SHCTX，跟随安装器的当前用户（HKCU）／所有用户（HKLM）范围，避免管理员提升后写入错误用户账户。不写默认打开关联，`MultiSelectModel=Single` 限制单文件入口；卸载只有在命令仍指向本安装目录时删除自己的键，并通知 Shell 刷新关联。Windows 11 传统菜单通常在“显示更多选项”中。
+NSIS `customInstall` 不注册菜单，仅清理本安装命令匹配且未标记用户主动启用的旧自动注册。`electron/context-menu.cjs` 管理 PNG、JPG、JPEG、WebP、BMP、PDF 的 `Software\Classes\SystemFileAssociations\.<扩展名>\shell\FanhuaScreenshot.Edit`；用户从设置启用后才写 HKCU，并标记 `FanhuaOptIn=1`。命令的程序路径与 `%1` 均带引号，`MultiSelectModel=Single`；不修改默认打开关联。运行时只改当前用户，不能静默移除其他安装或系统级旧注册。设置展示实际注册状态，失败不伪装已关闭。注册事务快照与回滚防止部分写入；卸载只删除仍属于本安装的键。Windows 11 传统菜单通常在“显示更多选项”中。
+
+`electron/settings.cjs` 校验并原子保存全局偏好，使用串行队列处理并发修改；右键注册及设置保存失败时回滚。仅设置窗口可更改全局设置、登录启动和 LocalSend 路径；预览可读取偏好并打开设置。新预览一次性读取编辑、保存、OCR 和翻译默认值，避免后台设置变化改写正在编辑的图片。通知默认开启，在主进程准备就绪后发送一次；正文使用用户指定文案，快捷键冲突时单独提示。
+
+系统集成依据：[Electron Notification](https://www.electronjs.org/docs/latest/api/notification)、[Windows 应用注册](https://learn.microsoft.com/en-us/windows/win32/shell/app-registration)、[SHChangeNotify](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shchangenotify)。通知正文使用普通字符串，不构造用户输入的 Toast XML；注册命令通过固定 PowerShell 脚本和 JSON 数据边界处理，不拼接执行路径为脚本。
 
 首启与 `second-instance` 均交给 `handleLaunch`，仅显式 `--edit-image` 接受完整绝对路径。`requestSingleInstanceLock` 的 additionalData 携带原始参数，避免 Chromium 重排二次启动参数导致路径错位。读取限制为 96 MB、32768 单边和一亿像素，按实际文件头验证格式；PNG/JPEG 使用 Electron NativeImage，WebP 惰性加载 Sharp，BMP 支持 24/32 位 BI_RGB，校验像素偏移、步长和数据长度。普通“打开图片”和右键入口共用解码器。右键入口传递 `initialEditing` 并使用编辑窗口尺寸，不会先打开设置；读取与编辑不改写源文件。
 
@@ -208,7 +213,7 @@ Vue 响应式对象不能直接传入 Electron 的隔离桥。截图确认前显
 
 ## 开发与验证
 
-Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。当前版本 1.6.0，仅发布 Windows x64 程序目录与 NSIS 安装包，尚未配置代码签名。`package.json` 限制 `os=win32`，开发、启动、构建与打包前检查 Windows x64；命令显式固定 Windows x64，`beforePack` 再校验实际目标以拒绝其他平台或架构。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
+Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。当前版本 1.7.0，仅发布 Windows x64 程序目录与 NSIS 安装包，尚未配置代码签名。`package.json` 限制 `os=win32`，开发、启动、构建与打包前检查 Windows x64；命令显式固定 Windows x64，`beforePack` 再校验实际目标以拒绝其他平台或架构。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
 
 - 工作区既有 `tests/` 删除保持不变，历史单元及端到端记录参见 `docs/VALIDATION.md`，本轮使用下列独立脚本。桌面测试使用隔离用户数据目录，避免与正在运行的旧版本共用单实例锁或水印存档。
 - `scripts/verify-windows-target.cjs`：检查 Windows x64 构建约束与其他平台、架构的拒绝路径。

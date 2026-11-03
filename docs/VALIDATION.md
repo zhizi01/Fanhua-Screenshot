@@ -1,5 +1,27 @@
 # 验证记录
 
+## 1.7.0：托盘工具、独立设置与启动通知
+
+日期：2026-11-04。Windows 11 x64 / Electron 45.2.1。各界面回归使用独立用户数据目录，未恢复或提交工作区既有 `tests/` 删除；未执行安装向导，未修改真实开机启动项或注册表。
+
+- `verify-settings-service.cjs`：默认右键关闭、启动不改注册表、UTF-8 原子保存、并发局部更新、值校验、磁盘失败时精确回滚注册状态、失败不广播成功、损坏／过大设置可见、临时文件清理均通过。
+- `verify-startup-notification.cjs`：精确正文、系统支持检查、每次进程只尝试一次、关闭偏好、快捷键冲突变体、点击打开设置、通知失败不中断应用均通过。使用通知替身，不代表 Windows 勿扰状态下仍能显示通知。
+- `verify-context-menu-service.cjs`：六种文件格式主动启停、部分注册修复、旧系统级注册与外安装冲突提示、精确／有条件回滚、返回无效状态恢复、开发态拒绝注册、安装器只清旧自动注册均通过。实际固定 PowerShell 事务脚本在内存 RegistryKey 实现上执行，覆盖半写失败、过期快照、路径注入拒绝；真实系统只读查询为 0 / 6，未进行写入。
+- `verify-localsend.cjs`：路径选择集中到设置，手动路径失效／配置损坏明确报错、恢复自动、路径记忆与取消、shell-free 参数、共享 PNG 字节、启动失败清理、并发共享拒绝均通过。未向接收设备发送测试文件。
+- `verify-login-item.cjs` 通过：按 Windows 实际批准状态显示开机启动，任务管理器禁用、读取失败、其他启动项仍生效时不报告成功，查询与设置的程序路径和参数一致。全部使用系统 API 替身，未改真实启动项。
+- 设置服务补充等待中的系统写入测试：新图片读取最后已提交的偏好，不被注册表操作阻塞；设置队列本身仍串行并在退出时等待结算。注册表状态读取失败明确标记不可用，设置窗口渲染崩溃／未响应会销毁，避免再次打开空白窗口。
+- `verify-settings-ui.cjs` 源码与最终打包程序均通过：实际偏好保存和完整应用重启、新旧预览默认值隔离、字体／字号／保存格式／质量／OCR 和翻译方向、设置窗口复用和关闭销毁、480×420 四标签布局、模拟系统操作失败回滚与部分菜单清理、LocalSend 配置读取失败恢复。截图使用生成的源图和真实遮罩拖框，确认“截图后直接进入编辑”；强制渲染进程崩溃后设置可重新打开。页面错误为空，源码与打包版截图人工检查正常。
+- 源码 `verify-pdf-ui.cjs` 与 `verify-sharing-ui.cjs` 通过：PDF 分页状态、OCR 仅原图及最新页队列、各导出范围、实际 PDF 回开像素比较、取消保留原文件；PNG/JPEG 60% 真实剪贴板、共享下拉及 LocalSend 交接替身、窄窗口布局无回归，页面错误为空。
+- `npm run dist` 通过：Windows x64 目标约束、14 个离线翻译模型校验、类型检查、Vite、NSIS 新的可选右键注册／升级清理宏编译均成功。`verify-pdf-assets.cjs --hash-only` 核对最终 ASAR 内 200 项 PDF 资源及 manifest，SHA-256 全部一致。
+- 最终 EXE 的 `verify-windows-integration.cjs` 通过：PNG 首次启动及 JPG/JPEG/WebP/BMP/PDF 五次已有实例转发直接编辑、旧编辑保持，独立 PDF 首启正常；没有误弹设置窗口，普通启动无可见窗口、后台驻留，页面错误为空。安装器宏已编译，但未执行安装向导或实改 Explorer 菜单。
+- 最终 EXE 的 `verify-pdf-ui.cjs` 通过：多页编辑、原图 OCR 队列、PDF 回开像素比较、当前页图片／PDF、普通图片转 PDF、取消保护及损坏文件恢复均正常，没有页面错误或远程请求。全轮修改文件严格 UTF-8 解码、Git 空白检查与 package/lock 的 1.7.0 版本一致性检查通过。
+
+证据：`artifacts/settings-ui-regression-{source,packaged}.json`、`settings-service/regression.json`、`context-menu-service.json`、`localsend-verification.json`、`windows-integration-packaged.json`、`pdf-regression-packaged.json` 及对应界面截图。通知与登录项纯服务脚本将断言结果输出到终端。
+
+安装包：`release/1.7.0/Fanhua-Screenshot-1.7.0-Setup.exe`，341,016,271 字节。未配置代码签名。
+
+SHA-256：`79ea4ec1039c145f795b757b89633a54fc988bab6215401849b1342023546b47`。
+
 ## 1.6.0：PDF 分页编辑与图片／PDF 导出
 
 日期：2026-11-04。环境继续为 Windows 11 x64 / Electron 45.2.1。使用隔离用户数据目录和本地生成的测试 PDF；保留原有 `tests/` 文件删除，未恢复或提交这些删除，未运行安装程序或修改系统注册表。
