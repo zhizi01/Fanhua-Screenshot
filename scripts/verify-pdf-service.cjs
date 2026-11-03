@@ -197,8 +197,8 @@ async function run() {
   await collision.dispose()
   await noTemps()
   const installer = await fs.readFile(path.resolve(__dirname, '../build/installer.nsh'), 'utf8')
-  assert(installer.includes('!insertmacro FanhuaRegisterImageVerb "pdf"'))
-  assert(installer.includes('!insertmacro FanhuaUnregisterImageVerb "pdf"'))
+  assert(!installer.includes('WriteRegStr'), 'Installing PDF support must not opt into the Explorer menu')
+  assert(installer.includes('!insertmacro FanhuaUnregisterImageVerb ${ROOT} "pdf"'))
   const report = { pureNode: true, guiOpened: false, staticPdfPages: 2, pageSizesAndPixelsPreserved: true, transparencyPreserved: true, pngBytesLimit: MAX_TOTAL_BYTES, staticPngAndChunkBoundariesValidated: true, corruptIdatRejectedBeforePdfLib: true, lazyLoadingAndChooserCancellation: true, pdfInputAndHeaderValidation: true, ownerIsolation: true, appendOrderAndCount: true, atomicReplace: true, writeFailurePreservesExisting: true, renameFailurePreservesExisting: true, preexistingTemporaryFilePreserved: true, cancelCloseAndQuitCleanTemporary: true, noPartialFiles: true, pdfExplorerVerb: true }
   await fs.writeFile(path.join(directory, 'service-regression.json'), JSON.stringify(report, null, 2) + '\n')
   console.log(JSON.stringify(report, null, 2))

@@ -1,35 +1,58 @@
-; Follow NSIS current/all ShellVarContext, including elevated all-user installs.
-; Do not replace image defaults or another app's keys.
-!macro FanhuaRegisterImageVerb EXT
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\FanhuaScreenshot.Edit" "" "使用繁花有图编辑"
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\FanhuaScreenshot.Edit" "Icon" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}",0'
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\FanhuaScreenshot.Edit" "MultiSelectModel" "Single"
-  WriteRegStr SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\FanhuaScreenshot.Edit\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --edit-image "%1"'
+; Installation never opts the user into Explorer integration. The settings
+; window owns new HKCU registration; only legacy auto-registration is cleaned.
+!macro FanhuaRemoveLegacyImageVerb ROOT EXT
+  ReadRegStr $R0 ${ROOT} "Software\Classes\SystemFileAssociations\.${EXT}\shell\FanhuaScreenshot.Edit\command" ""
+  ${If} $R0 == '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --edit-image "%1"'
+    ReadRegStr $R1 ${ROOT} "Software\Classes\SystemFileAssociations\.${EXT}\shell\FanhuaScreenshot.Edit" "FanhuaOptIn"
+    ${If} $R1 != "1"
+      DeleteRegKey ${ROOT} "Software\Classes\SystemFileAssociations\.${EXT}\shell\FanhuaScreenshot.Edit"
+    ${EndIf}
+  ${EndIf}
 !macroend
 
-!macro FanhuaUnregisterImageVerb EXT
-  ; An older installation must not remove a newer installation's registration.
-  ReadRegStr $R0 SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\FanhuaScreenshot.Edit\command" ""
-  StrCmp $R0 '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --edit-image "%1"' 0 +2
-    DeleteRegKey SHCTX "Software\Classes\SystemFileAssociations\.${EXT}\shell\FanhuaScreenshot.Edit"
+!macro FanhuaUnregisterImageVerb ROOT EXT
+  ; Keep a newer installation's registration even when an older one is removed.
+  ReadRegStr $R0 ${ROOT} "Software\Classes\SystemFileAssociations\.${EXT}\shell\FanhuaScreenshot.Edit\command" ""
+  ${If} $R0 == '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --edit-image "%1"'
+    DeleteRegKey ${ROOT} "Software\Classes\SystemFileAssociations\.${EXT}\shell\FanhuaScreenshot.Edit"
+  ${EndIf}
+!macroend
+
+!macro FanhuaCleanLegacyScope ROOT
+  !insertmacro FanhuaRemoveLegacyImageVerb ${ROOT} "png"
+  !insertmacro FanhuaRemoveLegacyImageVerb ${ROOT} "jpg"
+  !insertmacro FanhuaRemoveLegacyImageVerb ${ROOT} "jpeg"
+  !insertmacro FanhuaRemoveLegacyImageVerb ${ROOT} "webp"
+  !insertmacro FanhuaRemoveLegacyImageVerb ${ROOT} "bmp"
+  !insertmacro FanhuaRemoveLegacyImageVerb ${ROOT} "pdf"
+!macroend
+
+!macro FanhuaUnregisterScope ROOT
+  !insertmacro FanhuaUnregisterImageVerb ${ROOT} "png"
+  !insertmacro FanhuaUnregisterImageVerb ${ROOT} "jpg"
+  !insertmacro FanhuaUnregisterImageVerb ${ROOT} "jpeg"
+  !insertmacro FanhuaUnregisterImageVerb ${ROOT} "webp"
+  !insertmacro FanhuaUnregisterImageVerb ${ROOT} "bmp"
+  !insertmacro FanhuaUnregisterImageVerb ${ROOT} "pdf"
 !macroend
 
 !macro customInstall
-  !insertmacro FanhuaRegisterImageVerb "png"
-  !insertmacro FanhuaRegisterImageVerb "jpg"
-  !insertmacro FanhuaRegisterImageVerb "jpeg"
-  !insertmacro FanhuaRegisterImageVerb "webp"
-  !insertmacro FanhuaRegisterImageVerb "bmp"
-  !insertmacro FanhuaRegisterImageVerb "pdf"
+  ; SHCTX follows the current/all-user installation mode, so an all-user update
+  ; can remove the legacy HKLM verb. HKCU also covers this account's old install.
+  !insertmacro FanhuaCleanLegacyScope SHCTX
+  !insertmacro FanhuaCleanLegacyScope HKCU
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 !macroend
 
 !macro customUnInstall
-  !insertmacro FanhuaUnregisterImageVerb "png"
-  !insertmacro FanhuaUnregisterImageVerb "jpg"
-  !insertmacro FanhuaUnregisterImageVerb "jpeg"
-  !insertmacro FanhuaUnregisterImageVerb "webp"
-  !insertmacro FanhuaUnregisterImageVerb "bmp"
-  !insertmacro FanhuaUnregisterImageVerb "pdf"
+  ${If} ${isUpdated}
+    ; During an update keep the user's explicit opt-in, but retire old versions'
+    ; automatic registrations. A genuine uninstall removes this installation's verb.
+    !insertmacro FanhuaCleanLegacyScope SHCTX
+    !insertmacro FanhuaCleanLegacyScope HKCU
+  ${Else}
+    !insertmacro FanhuaUnregisterScope SHCTX
+    !insertmacro FanhuaUnregisterScope HKCU
+  ${EndIf}
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 !macroend
