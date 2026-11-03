@@ -5,6 +5,7 @@
   "description": "繁花有图 · 轻盈、自在的桌面截图与标注工具",
   "author": "繁花有图",
   "type": "module",
+  "engines": { "node": ">=22.12.0" },
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -14,24 +15,25 @@
     "start": "electron .",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:packaged": "node scripts/test-packaged.mjs",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
     "ant-design-vue": "^4.2.6",
-    "lucide-vue-next": "^0.468.0",
+    "lucide-vue-next": "^1.0.0",
     "vue": "^3.5.13"
   },
   "devDependencies": {
-    "@playwright/test": "^1.51.0",
+    "@playwright/test": "^1.64.1",
     "@types/node": "^22.10.0",
-    "@vitejs/plugin-vue": "^5.2.1",
-    "electron": "^35.0.0",
-    "electron-builder": "^26.0.12",
-    "typescript": "~5.7.2",
-    "vite": "^6.1.0",
-    "vitest": "^3.0.5",
-    "vue-tsc": "^2.2.0"
+    "@vitejs/plugin-vue": "^6.0.10",
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0",
+    "vue-tsc": "^3.3.14"
   },
   "build": {
     "appId": "cn.fanhua.screenshot",
