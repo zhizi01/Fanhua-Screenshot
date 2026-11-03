@@ -16,12 +16,12 @@ function navigate(value: number | null | undefined) {
 </script>
 
 <template>
-  <div class="pdf-page-bar" data-testid="pdf-page-bar" aria-label="PDF 页面导航">
+  <div class="pdf-page-bar" aria-label="PDF 页面导航">
     <div class="pdf-name" :title="name"><FileText :size="14" /><span>{{ name }}</span></div>
     <div class="pdf-navigation">
       <button type="button" aria-label="上一页" title="上一页" :disabled="busy || page <= 1" @click="navigate(page - 1)"><ChevronLeft :size="16" /></button>
       <AInputNumber v-model:value="entered" size="small" aria-label="PDF 页码" :min="1" :max="total" :precision="0" :controls="false" :disabled="busy" @press-enter="navigate(entered)" @blur="navigate(entered)" />
-      <span class="pdf-total" data-testid="pdf-page-count">/ {{ total }}</span>
+      <span class="pdf-total">/ {{ total }}</span>
       <button type="button" aria-label="下一页" title="下一页" :disabled="busy || page >= total" @click="navigate(page + 1)"><ChevronRight :size="16" /></button>
     </div>
   </div>

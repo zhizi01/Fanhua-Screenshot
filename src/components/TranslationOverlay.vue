@@ -6,7 +6,6 @@ const surface = ref<HTMLElement>()
 const measure = ref<HTMLElement>()
 const fontSize = ref(12)
 const lineCount = ref(1)
-const overflowing = ref(false)
 let observer: ResizeObserver | undefined
 let frame = 0
 let disposed = false
@@ -35,7 +34,6 @@ function fitText() {
     }
   }
   fontSize.value = Math.floor(low * 10) / 10
-  overflowing.value = !fits(fontSize.value)
   lineCount.value = Math.max(1, Math.floor(height / (fontSize.value * 1.18)))
 }
 function scheduleFit() {
@@ -54,8 +52,8 @@ onBeforeUnmount(() => { disposed = true; observer?.disconnect(); cancelAnimation
 </script>
 
 <template>
-  <div ref="surface" class="translation-overlay" data-testid="translation-overlay" :data-overflow="overflowing" :title="text">
-    <div class="overlay-copy" data-testid="translation-overlay-text" :style="{ fontSize: `${fontSize}px`, WebkitLineClamp: lineCount }">{{ text }}</div>
+  <div ref="surface" class="translation-overlay" :title="text">
+    <div class="overlay-copy" :style="{ fontSize: `${fontSize}px`, WebkitLineClamp: lineCount }">{{ text }}</div>
     <div ref="measure" class="overlay-measure" aria-hidden="true">{{ text }}</div>
   </div>
 </template>

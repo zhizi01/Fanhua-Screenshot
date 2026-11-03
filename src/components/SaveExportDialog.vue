@@ -56,7 +56,7 @@ function cancel() {
         <label class="quality-label">图片质量 <span>{{ quality }}%</span></label>
         <ASlider v-model:value="quality" :min="10" :max="100" :disabled="busy" :aria-label-for-handle="'图片质量'" />
       </template>
-      <div v-if="busy && progress" class="export-progress" data-testid="pdf-export-progress" role="status" aria-live="polite">
+      <div v-if="busy && progress" class="export-progress" role="status" aria-live="polite">
         <progress :value="progress.completed" :max="progress.total" aria-label="PDF导出进度"></progress>
         <span>{{ canceling ? '正在取消导出…' : progress.finalizing ? '正在写入 PDF…' : `正在导出 ${progress.completed} / ${progress.total} 页` }}</span>
       </div>

@@ -7,8 +7,6 @@ function startupBody(shortcut = 'Alt+A', registered = true) {
     ? `Hello，现在繁花有图已经在你的设备中完成了准备，随时可以通过${label} 发起截图。在不需要我的时候，我会一直休眠哦~`
     : `Hello，现在繁花有图已经在你的设备中完成了准备。${label} 暂时无法启用，你可以通过托盘菜单发起截图，或在设置中重试快捷键。在不需要我的时候，我会一直休眠哦~`
 }
-const STARTUP_BODY = startupBody()
-const UNAVAILABLE_BODY = startupBody('Alt+A', false)
 
 function createStartupNotifier({ Notification, openSettings, icon, onError = () => {} }) {
   let attempted = false, disposed = false, notification
@@ -35,4 +33,4 @@ function createStartupNotifier({ Notification, openSettings, icon, onError = () 
   }
 }
 
-module.exports = { createStartupNotifier, startupBody, STARTUP_BODY, UNAVAILABLE_BODY }
+module.exports = { createStartupNotifier }

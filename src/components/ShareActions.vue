@@ -72,7 +72,7 @@ onBeforeUnmount(() => cancelAnimationFrame(focusFrame))
             <AMenuItem key="png" aria-label="复制到剪贴板" @click="choose('png')"><span class="copy-menu-content"><Copy :size="14" /><span>复制到剪贴板</span><small>PNG</small></span></AMenuItem>
             <AMenuItem key="deskflow" :disabled="!desktop" aria-label="复制到 DeskFlow 剪贴板" @click="choose('deskflow')">
               <ATooltip title="由于DeskFlow传输有限制，会造成质量压缩。" placement="bottomRight" :mouse-enter-delay="0.2">
-                <span class="copy-menu-content" data-testid="deskflow-copy-option"><MonitorUp :size="14" /><span>复制到 DeskFlow 剪贴板</span><small>JPG · 60%</small></span>
+                <span class="copy-menu-content"><MonitorUp :size="14" /><span>复制到 DeskFlow 剪贴板</span><small>JPG · 60%</small></span>
               </ATooltip>
             </AMenuItem>
           </AMenu>
@@ -84,7 +84,7 @@ onBeforeUnmount(() => cancelAnimationFrame(focusFrame))
         <template #icon><Share2 :size="15" /></template><span class="action-label">共享</span><ChevronDown :size="11" />
       </AButton>
       <template #overlay>
-        <AMenu :id="shareMenuId" class="copy-menu share-menu" aria-label="共享方式" data-testid="share-menu" @keydown="shareMenuKeydown">
+        <AMenu :id="shareMenuId" class="copy-menu share-menu" aria-label="共享方式" @keydown="shareMenuKeydown">
           <AMenuItem key="localsend" :disabled="disabled || busy || !desktop" aria-label="通过LocalSend共享" @click="chooseLocalSend"><span class="copy-menu-content"><Share2 :size="14" /><span>通过LocalSend共享</span></span></AMenuItem>
         </AMenu>
       </template>

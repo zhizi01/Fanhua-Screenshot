@@ -3,10 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Button as AButton, InputNumber as AInputNumber, Slider as ASlider, Select as ASelect, message } from 'ant-design-vue'
 import { ArrowUpRight, Check, ChevronDown, Circle, Download, Flower2, Grip, Image as ImageIcon, Languages, Layers3, Maximize, Minus, MousePointer2, Pencil, Pin, PinOff, Plus, Redo2, RefreshCw, Scan, ScanText, Settings, Square, Stamp, Trash2, Type, Undo2, X } from 'lucide-vue-next'
 import type { AppSettings, ExportOptions, ImageFormat, OcrCapabilities, OcrParagraph, Screenshot, WatermarkConfig } from '../shared'
-import { getDemoScreenshot } from '../demo'
 import { arrowEndpointAt, DocumentHistory, hitTest, imagePoint, markerDiameter, moveLayer, normalizeRect, resizeShape, sequenceLabel, shapeHandleAt, shapeRect, visualLayers, type ArrowLayer, type BorderStyle, type EditorDocument, type Layer, type MosaicLayer, type NumberStyle, type Point, type ShapeHandle, type ShapeLayer, type TextStyle, type Tool } from '../editor/model'
 import { canvasFont, paintArrow, paintShape, renderScene, renderSelection, textMeasure } from '../editor/render'
-import { encodeBmp } from '../editor/export'
 import { defaultWatermark, loadWatermarkImage } from '../watermark/render'
 import SaveExportDialog from '../components/SaveExportDialog.vue'
 import ShareActions from '../components/ShareActions.vue'
@@ -555,17 +553,9 @@ async function confirmSave(options: ExportOptions) {
       if (await exportPdf(options)) { exportOpen.value = false; message.success('PDF 已保存') }
       return
     }
-    if (window.fanhua) { const result = await window.fanhua.saveImage(await exportImage(options.format, options.quality), { format: options.format, quality: options.quality }); if (result.canceled) return }
-    else {
-      const output = await exportCanvas(options.format)
-      let url: string
-      if (options.format === 'bmp') {
-        const bytes = encodeBmp(output.width, output.height, output.getContext('2d')!.getImageData(0, 0, output.width, output.height).data)
-        url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/bmp' }))
-      } else url = output.toDataURL(`image/${options.format}`, (options.quality || 92) / 100)
-      const a = document.createElement('a'); a.href = url; a.download = `繁花有图-${new Date().toISOString().replace(/[:.]/g, '-')}.${options.format === 'jpeg' ? 'jpg' : options.format}`; a.click()
-      if (url.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(url), 1000)
-    }
+    if (!window.fanhua) throw new Error('图片保存仅在 Windows 桌面版中可用。')
+    const result = await window.fanhua.saveImage(await exportImage(options.format, options.quality), { format: options.format, quality: options.quality })
+    if (result.canceled) return
     saved.value = true; retainCurrentPage(); exportOpen.value = false; message.success(pdfSource ? '当前页图片已保存' : '图片已保存')
   } catch (cause) { if (!pdfCanceling.value && !disposed) message.error(cause instanceof Error ? cause.message : '保存失败，请重试') }
   finally {
@@ -580,12 +570,11 @@ function actionError(cause: unknown, fallback: string) {
 }
 async function copy(mode: 'png' | 'deskflow' = 'png') {
   if (loading.value || error.value || copying.value || sharing.value || saving.value) return
-  if (mode === 'deskflow' && !window.fanhua) { message.info('DeskFlow 图片复制需在桌面版运行。'); return }
+  if (!window.fanhua) { message.info('图片复制仅在 Windows 桌面版中可用。'); return }
   copying.value = mode
   try {
     const dataUrl = await exportImage(mode === 'deskflow' ? 'jpeg' : 'png', mode === 'deskflow' ? 60 : 92)
-    if (window.fanhua) await window.fanhua.copyImage(dataUrl, mode)
-    else { const blob = await (await fetch(dataUrl)).blob(); await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]) }
+    await window.fanhua.copyImage(dataUrl, mode)
     message.success(mode === 'deskflow' ? '已复制 DeskFlow 图片（JPG 60%）' : '已复制图片')
   } catch (cause) { message.error(actionError(cause, '复制失败，请使用保存图片')) }
   finally { copying.value = null }
@@ -701,10 +690,10 @@ async function togglePin() {
   if (!window.fanhua) { message.info('桌面版支持将图片固定在其他窗口上方'); return }
   try { pinned.value = await window.fanhua.setPinned(!pinned.value) } catch { message.error('固定窗口失败') }
 }
-async function close() { if (window.fanhua) await window.fanhua.closeWindow(); else location.search = '' }
+async function close() { await window.fanhua?.closeWindow() }
 async function minimize() { await window.fanhua?.minimizeWindow() }
 async function openSettings() {
-  try { if (window.fanhua) await window.fanhua.openSettings(); else location.search = '?view=settings' }
+  try { await window.fanhua?.openSettings() }
   catch { message.error('无法打开设置，请通过托盘重试') }
 }
 async function loadPreferences() {
@@ -727,7 +716,7 @@ async function loadPreferences() {
 function keyDown(event: KeyboardEvent) {
   if (exportOpen.value || watermarkOpen.value || saving.value || loading.value) return
   const target = event.target as HTMLElement
-  if (target.closest('input,textarea,select,[contenteditable="true"],[role="slider"],.ant-select,[data-testid="ocr-sidebar"]')) return
+  if (target.closest('input,textarea,select,[contenteditable="true"],[role="slider"],.ant-select,.ocr-sidebar')) return
   if (event.key === 'Escape' && drag) { event.preventDefault(); cancelDrag(); return }
   if (event.ctrlKey || event.metaKey) {
     if (event.key.toLowerCase() === 's') { event.preventDefault(); void save() }
@@ -768,8 +757,9 @@ onMounted(async () => {
   })
   if (stage.value) resizeObserver.observe(stage.value)
   try {
+    if (!window.fanhua) throw new Error('图片编辑仅在 Windows 桌面版中可用，请启动繁花有图桌面应用。')
     await loadPreferences()
-    const initial = await (window.fanhua ? window.fanhua.getPreview() : getDemoScreenshot())
+    const initial = await window.fanhua.getPreview()
     if (disposed) return
     originalScreenshot = { ...initial, pdf: undefined }
     screenshot.value = initial
@@ -806,8 +796,8 @@ onBeforeUnmount(() => {
 <template>
   <div class="preview-app">
     <header class="titlebar drag-region">
-      <div class="brand"><Flower2 :size="16" /><span>繁花有图</span><span class="window-name">{{ editing ? '编辑' : '预览' }}</span><span v-if="!isDesktop" class="demo-label">演示</span></div>
-      <div class="window-controls no-drag"><button class="icon-button" aria-label="打开设置" title="偏好设置" @click="openSettings"><Settings :size="15" /></button><button class="icon-button" aria-label="最小化窗口" @click="minimize"><Minus :size="16" /></button><button class="icon-button danger" aria-label="关闭窗口不保存" title="关闭窗口，不自动保存" @click="close"><X :size="17" /></button></div>
+      <div class="brand"><Flower2 :size="16" /><span>繁花有图</span><span class="window-name">{{ editing ? '编辑' : '预览' }}</span></div>
+      <div class="window-controls no-drag"><button class="icon-button" aria-label="打开设置" title="偏好设置" :disabled="!isDesktop" @click="openSettings"><Settings :size="15" /></button><button class="icon-button" aria-label="最小化窗口" :disabled="!isDesktop" @click="minimize"><Minus :size="16" /></button><button class="icon-button danger" aria-label="关闭窗口不保存" title="关闭窗口，不自动保存" :disabled="!isDesktop" @click="close"><X :size="17" /></button></div>
     </header>
     <div class="preview-topbar">
       <div class="file-identity"><ImageIcon :size="14" /><span>{{ screenshot ? `${screenshot.width} × ${screenshot.height}` : '读取图片…' }}</span><span v-if="layers.length" class="annotation-count">{{ layers.length }} 个标注</span></div>
@@ -828,13 +818,13 @@ onBeforeUnmount(() => {
     </div>
     <main class="workspace" :class="{ editing }">
       <section class="image-workspace">
-        <div ref="stage" class="image-stage" data-testid="image-stage">
-          <div v-if="loading || error" class="load-state"><ImageIcon :size="28" /><h2>{{ error || '正在读取图片…' }}</h2><p v-if="error">请重新截图或打开图片</p></div>
+        <div ref="stage" class="image-stage">
+          <div v-if="loading || error" class="load-state"><ImageIcon :size="28" /><h2>{{ error || '正在读取图片…' }}</h2><p v-if="error && isDesktop">请重新截图或打开图片</p></div>
           <div v-else-if="screenshot" class="canvas-surface" :style="surfaceStyle">
           <div class="canvas-wrapper" :style="{ width: `${screenshot.width * scale}px`, height: `${screenshot.height * scale}px` }">
-            <canvas ref="canvas" :width="screenshot.width" :height="screenshot.height" :style="{ width: '100%', height: '100%', cursor: !editing ? 'default' : tool === 'select' ? 'default' : 'crosshair' }" :title="hoveredTranslation" tabindex="0" role="img" aria-label="截图编辑画布" data-testid="editor-canvas" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerleave="hoveredParagraphId = undefined" @pointerup="pointerUp" @pointercancel="pointerCancel" @lostpointercapture="pointerCancel" @dblclick="doubleClick" @contextmenu="openImageContextMenu"></canvas>
-            <div v-if="ocrOpen" class="ocr-regions" aria-hidden="true" data-testid="ocr-regions">
-              <div v-for="(paragraph, index) in ocrParagraphs" :key="paragraph.id" class="ocr-region" :class="{ active: selectedParagraphId === paragraph.id, translated: !!translatedText(paragraph) }" :style="paragraphStyle(paragraph)" :data-paragraph-id="paragraph.id" data-testid="ocr-region">
+            <canvas ref="canvas" :width="screenshot.width" :height="screenshot.height" :style="{ width: '100%', height: '100%', cursor: !editing ? 'default' : tool === 'select' ? 'default' : 'crosshair' }" :title="hoveredTranslation" tabindex="0" role="img" aria-label="截图编辑画布" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerleave="hoveredParagraphId = undefined" @pointerup="pointerUp" @pointercancel="pointerCancel" @lostpointercapture="pointerCancel" @dblclick="doubleClick" @contextmenu="openImageContextMenu"></canvas>
+            <div v-if="ocrOpen" class="ocr-regions" aria-hidden="true">
+              <div v-for="(paragraph, index) in ocrParagraphs" :key="paragraph.id" class="ocr-region" :class="{ active: selectedParagraphId === paragraph.id, translated: !!translatedText(paragraph) }" :style="paragraphStyle(paragraph)">
                 <TranslationOverlay v-if="translatedText(paragraph)" :text="translatedText(paragraph)" :source-line-height="paragraphLineHeight(paragraph)" :scale="scale" />
                 <span v-else>{{ index + 1 }}</span>
               </div>
@@ -918,7 +908,6 @@ onBeforeUnmount(() => {
 .brand { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 550; }
 .brand > svg { color: #7860d2; }
 .window-name { color: #797780; font-weight: 400; margin-left: 5px; }
-.demo-label { color: #8b8397; font-size: 10px; border: 1px solid #ded9e8; border-radius: 3px; padding: 0 4px; }
 .window-controls { display: flex; gap: 2px; }
 .window-controls .icon-button { width: 30px; height: 28px; border-radius: 4px; }
 .preview-topbar {

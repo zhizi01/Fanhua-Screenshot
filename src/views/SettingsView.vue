@@ -175,7 +175,7 @@ onBeforeUnmount(() => { disposed = true; loadRequest++; stateRequest++; unsubscr
 </script>
 
 <template>
-  <div class="settings-window" data-testid="settings-window">
+  <div class="settings-window">
     <header class="titlebar drag-region">
       <div class="app-title"><FlowerLogo :size="22" /><h1>繁花有图 <span>设置</span></h1><small v-if="state">{{ state.version }}</small></div>
       <button type="button" class="icon-button danger no-drag" aria-label="关闭设置" title="关闭设置，继续在系统托盘运行" :disabled="!!savingKey" @click="hide"><X :size="17" /></button>
@@ -264,7 +264,7 @@ onBeforeUnmount(() => { disposed = true; loadRequest++; stateRequest++; unsubscr
         <div class="tab-content">
           <h2>LocalSend</h2>
           <p class="page-note">将编辑后的图片交给 LocalSend，再选择接收设备。</p>
-          <label class="field"><span>程序位置</span><div class="program-path" data-testid="localsend-executable" :title="localSendReadFailed ? '位置读取失败' : localSendPath || '自动查找 LocalSend'">{{ localSendReadFailed ? '位置读取失败' : localSendPath || '自动查找 LocalSend' }}</div></label>
+          <label class="field"><span>程序位置</span><div class="program-path" :title="localSendReadFailed ? '位置读取失败' : localSendPath || '自动查找 LocalSend'">{{ localSendReadFailed ? '位置读取失败' : localSendPath || '自动查找 LocalSend' }}</div></label>
           <div class="path-actions"><AButton :disabled="busy" :loading="savingKey === 'localsend'" aria-label="选择LocalSend程序" @click="changeLocalSend()"><template #icon><FolderOpen :size="14" /></template>选择程序</AButton><AButton :disabled="busy || (!localSendPath && !localSendError)" aria-label="恢复自动查找LocalSend" @click="changeLocalSend(true)">恢复自动查找</AButton></div>
           <p v-if="localSendError" class="inline-warning" role="alert">{{ localSendError }}</p>
           <p class="inline-note">自动查找适合常规安装；使用便携版时，可选择 LocalSend.exe。取消文件选择不会改变已有路径。</p>

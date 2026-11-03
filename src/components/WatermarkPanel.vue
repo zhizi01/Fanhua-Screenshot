@@ -14,7 +14,6 @@ const presetName = ref('')
 const loadingPresets = ref(false)
 const savingPreset = ref(false)
 const choosingImage = ref(false)
-const imageInput = ref<HTMLInputElement>()
 const presetError = ref('')
 const fontOptions = computed(() => [...new Set([props.modelValue.font, ...props.fonts])].filter(Boolean).map(value => ({ value, label: value })))
 const presetOptions = computed(() => presets.value.map(item => ({ value: item.id, label: item.name })))
@@ -88,7 +87,7 @@ async function removePreset() {
 
 async function chooseImage() {
   if (choosingImage.value) return
-  if (!window.fanhua) { imageInput.value?.click(); return }
+  if (!window.fanhua) { message.error('水印图片选择仅在 Windows 桌面版中可用。'); return }
   choosingImage.value = true
   try {
     const chosen = await window.fanhua.chooseWatermarkImage()
@@ -99,37 +98,12 @@ async function chooseImage() {
   finally { choosingImage.value = false }
 }
 
-async function browserImage(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file) return
-  if (file.size > 16 * 1024 * 1024) { message.error('请选择小于 16 MB 的水印图片'); return }
-  const url = URL.createObjectURL(file)
-  choosingImage.value = true
-  try {
-    const image = new Image()
-    image.src = url
-    await image.decode()
-    if (image.naturalWidth * image.naturalHeight > 16000000) throw new Error('水印图片最多支持 1600 万像素')
-    const scale = Math.min(1, 2048 / image.naturalWidth, 2048 / image.naturalHeight)
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
-    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
-    canvas.getContext('2d')!.drawImage(image, 0, 0, canvas.width, canvas.height)
-    const dataUrl = canvas.toDataURL('image/png')
-    await loadWatermarkImage(dataUrl)
-    update({ kind: 'image', enabled: true, imageDataUrl: dataUrl, imageWidth: canvas.width, imageHeight: canvas.height })
-  } catch (error) { message.error(error instanceof Error ? error.message : '水印图片打开失败') }
-  finally { URL.revokeObjectURL(url); choosingImage.value = false }
-}
-
 watch(() => props.open, open => { if (open) void refreshPresets() }, { immediate: true })
 </script>
 
 <template>
   <AModal :open="open" title="水印" :width="600" :style="{ top: '24px' }" :body-style="{ maxHeight: 'calc(100vh - 164px)', overflowY: 'auto', paddingRight: '3px' }" :destroy-on-close="true" @cancel="close">
-    <div class="watermark-panel" data-testid="watermark-panel">
+    <div class="watermark-panel">
       <div class="enable-row"><span>在图片上添加水印</span><ASwitch aria-label="启用水印" :checked="modelValue.enabled" @change="value => update({ enabled: Boolean(value) })" /></div>
       <div class="kind-row" role="group" aria-label="水印类型">
         <button :class="{ active: modelValue.kind === 'text' }" aria-label="文字水印" :aria-pressed="modelValue.kind === 'text'" @click="update({ kind: 'text' })"><Type :size="15" />文字水印</button>
@@ -146,7 +120,6 @@ watch(() => props.open, open => { if (open) void refreshPresets() }, { immediate
       </div>
       <div v-else class="image-settings">
         <div class="image-picker"><div class="image-thumbnail"><img v-if="modelValue.imageDataUrl" :src="modelValue.imageDataUrl" alt="当前水印图片" /><ImagePlus v-else :size="23" /></div><div><AButton size="small" :loading="choosingImage" aria-label="选择水印图片" @click="chooseImage">{{ modelValue.imageDataUrl ? '更换图片' : '选择图片' }}</AButton><p>{{ modelValue.imageDataUrl ? `${modelValue.imageWidth} × ${modelValue.imageHeight} px` : '支持透明 PNG、JPEG，源文件最大 16 MB' }}</p><p>最长边缩至 2048 px，存档图片最大 8 MB。</p></div></div>
-        <input ref="imageInput" class="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" aria-label="浏览器选择水印图片" @change="browserImage" />
         <label class="field inline-field">图片大小<AInputNumber size="small" aria-label="图片水印缩放百分比" :value="Math.round(modelValue.scale * 100)" :min="5" :max="400" :precision="0" addon-after="%" @change="value => update({ scale: Number(value) / 100 })" /><span class="subtle">相对原图尺寸，过大时适应画面</span></label>
       </div>
 
@@ -210,7 +183,6 @@ watch(() => props.open, open => { if (open) void refreshPresets() }, { immediate
 .image-thumbnail { width: 72px; height: 62px; border: 1px solid #ddd7e5; border-radius: 5px; display: flex; align-items: center; justify-content: center; color: #b5a7c4; background-color: #fff; background-image: linear-gradient(45deg,#eee 25%,transparent 25%),linear-gradient(-45deg,#eee 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#eee 75%),linear-gradient(-45deg,transparent 75%,#eee 75%); background-size: 12px 12px; background-position: 0 0,0 6px,6px -6px,-6px 0; }
 .image-thumbnail img { max-width: 64px; max-height: 54px; object-fit: contain; }
 .image-picker p { margin: 5px 0 0; font-size: 10px; color: #a195af; }
-.file-input { display: none; }
 .preset-section { margin-top: 15px; }
 .preset-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 9px; gap: 10px; }
 .preset-heading strong { font-weight: 500; font-size: 12px; }

@@ -265,21 +265,3 @@ export class DocumentHistory {
 }
 
 export function cloneLayers(layers: Layer[]): Layer[] { return layers.map(layer => ({ ...layer })) }
-
-/** History owns immutable snapshots; live pointer movement never mutates a stored state. */
-export class EditHistory {
-  private states: Layer[][] = [[]]
-  private cursor = 0
-  constructor(private limit = 100) {}
-  get canUndo() { return this.cursor > 0 }
-  get canRedo() { return this.cursor < this.states.length - 1 }
-  commit(layers: Layer[]) {
-    if (JSON.stringify(this.states[this.cursor]) === JSON.stringify(layers)) return
-    this.states = this.states.slice(0, this.cursor + 1)
-    this.states.push(cloneLayers(layers))
-    if (this.states.length > this.limit) this.states.shift()
-    this.cursor = this.states.length - 1
-  }
-  undo(): Layer[] { if (this.canUndo) this.cursor--; return cloneLayers(this.states[this.cursor]!) }
-  redo(): Layer[] { if (this.canRedo) this.cursor++; return cloneLayers(this.states[this.cursor]!) }
-}

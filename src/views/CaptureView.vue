@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Aperture, Check, Crosshair, LoaderCircle, Maximize2, MousePointer2, X } from 'lucide-vue-next'
-import type { CaptureContext, Rect, Screenshot, WindowRegion } from '../shared'
-import { getDemoCaptureContext } from '../demo'
-import { clampPoint, dragRect, isDrag, pixelRect, pixelSize, windowAtPoint } from '../capture/geometry'
+import type { CaptureContext, Rect, WindowRegion } from '../shared'
+import { clampPoint, dragRect, isDrag, pixelSize, windowAtPoint } from '../capture/geometry'
 import type { Point } from '../capture/geometry'
 
 const context = ref<CaptureContext | null>(null)
@@ -16,7 +15,7 @@ const error = ref('')
 const activePointerId = ref<number | null>(null)
 const hoveredWindow = ref<WindowRegion | null>(null)
 const selected = ref<Rect | null>(null)
-const isDemo = !window.fanhua
+const isDesktop = Boolean(window.fanhua)
 let unmounted = false
 let contextRevision = 0
 let unsubscribe: (() => void) | undefined
@@ -130,25 +129,10 @@ async function capture(rect: Rect) {
   busy.value = true
   error.value = ''
   try {
-    if (window.fanhua) {
-      // A hovered window comes from a Vue reactive proxy. Electron's context
-      // bridge can only clone plain data, so explicitly copy the numeric fields.
-      await window.fanhua.completeCapture({ x: rect.x, y: rect.y, width: rect.width, height: rect.height }, context.value.sessionId)
-    } else {
-      const c = context.value
-      const img = new Image()
-      img.src = c.dataUrl
-      await img.decode()
-      const pixels = pixelRect(rect, c.width, c.height, img.naturalWidth, img.naturalHeight)
-      if (pixels.width < 1 || pixels.height < 1) throw new Error('请选择至少 1 × 1 的截图区域')
-      const canvas = document.createElement('canvas')
-      canvas.width = pixels.width
-      canvas.height = pixels.height
-      canvas.getContext('2d')!.drawImage(img, pixels.x, pixels.y, pixels.width, pixels.height, 0, 0, canvas.width, canvas.height)
-      const screenshot: Screenshot = { id: crypto.randomUUID(), dataUrl: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height, createdAt: new Date().toISOString() }
-      sessionStorage.setItem('fanhua:demo-screenshot', JSON.stringify(screenshot))
-      location.search = '?view=preview'
-    }
+    if (!window.fanhua) throw new Error('截图功能仅在 Windows 桌面版中可用，请启动繁花有图桌面应用。')
+    // A hovered window comes from a Vue reactive proxy. Electron's context
+    // bridge can only clone plain data, so explicitly copy the numeric fields.
+    await window.fanhua.completeCapture({ x: rect.x, y: rect.y, width: rect.width, height: rect.height }, context.value.sessionId)
   } catch (cause) {
     if (revision !== contextRevision || unmounted) return
     error.value = cause instanceof Error ? cause.message : '截图未完成，请重试'
@@ -162,7 +146,6 @@ async function cancel() {
   clearPointer()
   try {
     if (window.fanhua) await window.fanhua.cancelCapture(context.value?.sessionId)
-    else location.search = ''
   } catch {
     if (revision !== contextRevision || unmounted) return
     error.value = '暂时无法关闭截图，请按 Esc 重试'
@@ -211,9 +194,13 @@ async function receiveContext(result: CaptureContext | null) {
   }
 }
 onMounted(async () => {
+  if (!window.fanhua) {
+    error.value = '截图功能仅在 Windows 桌面版中可用，请启动繁花有图桌面应用。'
+    return
+  }
   document.addEventListener('keydown', keydown)
-  if (window.fanhua) unsubscribe = window.fanhua.onCaptureContext(receiveContext)
-  try { await receiveContext(window.fanhua ? await window.fanhua.getCaptureContext() : getDemoCaptureContext()) }
+  unsubscribe = window.fanhua.onCaptureContext(receiveContext)
+  try { await receiveContext(await window.fanhua.getCaptureContext()) }
   catch (cause) { error.value = cause instanceof Error ? cause.message : '无法读取屏幕' }
 })
 onBeforeUnmount(() => {
@@ -226,11 +213,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main ref="stage" class="capture-stage" tabindex="-1" aria-label="截图框选区域" data-testid="capture-stage"
+  <main ref="stage" class="capture-stage" tabindex="-1" aria-label="截图框选区域"
     @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerUp" @pointercancel="onPointerCancel" @contextmenu.prevent="cancel">
     <img v-if="context" class="screen-image" :src="context.dataUrl" alt="当前屏幕的冻结画面" draggable="false" />
     <div v-for="(shade, index) in shades" :key="index" class="shade" :style="rectStyle(shade)" />
-    <div v-if="currentRect" class="selection" :style="selectionStyle" data-testid="capture-selection">
+    <div v-if="currentRect" class="selection" :style="selectionStyle">
       <span v-for="handle in ['tl', 'tc', 'tr', 'ml', 'mr', 'bl', 'bc', 'br']" :key="handle" class="handle" :class="handle" />
     </div>
     <div v-if="size && !busy" class="selection-label" :style="labelStyle" aria-live="polite">
@@ -244,11 +231,11 @@ onBeforeUnmount(() => {
 
     <div v-if="error" class="capture-error" role="alert" @pointerdown.stop @pointermove.stop @pointerup.stop>
       {{ error }}
-      <button type="button" @click="cancel">取消截图</button>
+      <button v-if="isDesktop" type="button" @click="cancel">取消截图</button>
     </div>
 
     <footer v-if="context && !start" class="capture-toolbar" @pointerdown.stop @pointermove.stop @pointerup.stop>
-      <div class="capture-brand"><Aperture :size="19" /><span>繁花有图</span><span v-if="isDemo" class="demo-badge">演示</span></div>
+      <div class="capture-brand"><Aperture :size="19" /><span>繁花有图</span></div>
       <span class="toolbar-divider" />
       <div class="capture-hint"><MousePointer2 :size="15" /><span>{{ context?.windowDetectionAvailable ? '单击截取窗口 · 拖动自由框选' : '拖动自由框选 · 单击截取全屏' }}</span></div>
       <span class="toolbar-divider" />
@@ -271,8 +258,8 @@ onBeforeUnmount(() => {
 .selection-label{position:absolute;display:flex;align-items:center;gap:9px;padding:7px 11px;max-width:min(480px,90vw);border:1px solid rgba(255,255,255,.12);border-radius:7px;background:rgba(31,27,42,.94);box-shadow:0 3px 12px rgba(0,0,0,.1);font-size:11px;white-space:nowrap;pointer-events:none}
 .window-title{overflow:hidden;text-overflow:ellipsis;max-width:260px}.dimensions{font-variant-numeric:tabular-nums;color:#e8dcff}.label-divider{width:1px;height:12px;background:rgba(255,255,255,.22)}
 .capture-toolbar{position:absolute;bottom:26px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;max-width:calc(100% - 32px);padding:11px 13px 11px 17px;background:rgba(30,27,39,.96);border:1px solid rgba(255,255,255,.15);border-radius:13px;box-shadow:0 12px 36px rgba(0,0,0,.2);cursor:default;white-space:nowrap}
-.capture-brand{display:flex;align-items:center;gap:8px;color:#f0eafa;font-size:12px;font-weight:600}.capture-brand>svg{color:#c2aaff}.capture-hint{display:flex;align-items:center;gap:7px;color:#d3cbdc;font-size:11px}.toolbar-divider{width:1px;height:19px;background:rgba(255,255,255,.15);margin:0 3px}.toolbar-action{display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;background:transparent;border:0;border-radius:6px;color:#e2d9ec;cursor:pointer}.toolbar-action:hover{background:#4d435f;color:#fff}.toolbar-action:disabled{opacity:.4;cursor:not-allowed}.toolbar-action.confirm{color:#c4a8ff}.toolbar-action.confirm:hover{background:#645083}.capture-toolbar kbd{min-width:24px;background:#3b3546;color:#c5bcd0;border-color:#574f63;font-size:10px;padding:2px 5px}.demo-badge{padding:2px 5px;border-radius:4px;border:1px solid #61546f;color:#cdb5ef;font-size:9px;font-weight:400}
+.capture-brand{display:flex;align-items:center;gap:8px;color:#f0eafa;font-size:12px;font-weight:600}.capture-brand>svg{color:#c2aaff}.capture-hint{display:flex;align-items:center;gap:7px;color:#d3cbdc;font-size:11px}.toolbar-divider{width:1px;height:19px;background:rgba(255,255,255,.15);margin:0 3px}.toolbar-action{display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;background:transparent;border:0;border-radius:6px;color:#e2d9ec;cursor:pointer}.toolbar-action:hover{background:#4d435f;color:#fff}.toolbar-action:disabled{opacity:.4;cursor:not-allowed}.toolbar-action.confirm{color:#c4a8ff}.toolbar-action.confirm:hover{background:#645083}.capture-toolbar kbd{min-width:24px;background:#3b3546;color:#c5bcd0;border-color:#574f63;font-size:10px;padding:2px 5px}
 .capture-progress{position:absolute;bottom:12px;right:16px;display:flex;align-items:center;gap:6px;padding:7px 10px;border-radius:6px;background:#211c2fea;font-size:11px;pointer-events:none}.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .capture-error{position:absolute;left:50%;bottom:100px;transform:translateX(-50%);max-width:calc(100% - 40px);padding:12px 16px;border:1px solid #a65e62;border-radius:9px;background:#39282cf5;color:#ffe4e8;font-size:12px;cursor:default}.capture-error button{margin-left:16px;border:0;border-radius:4px;background:#613d48;color:#fff;padding:4px 8px;cursor:pointer}.detection-note{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);font-size:10px;color:#fff;text-shadow:0 1px 3px #000;pointer-events:none}
-@media(max-width:650px){.capture-hint{font-size:10px}.capture-brand>span:not(.demo-badge){display:none}.capture-toolbar{gap:5px;padding:9px}.toolbar-divider{margin:0}.capture-toolbar kbd{display:none}}
+@media(max-width:650px){.capture-hint{font-size:10px}.capture-brand>span{display:none}.capture-toolbar{gap:5px;padding:9px}.toolbar-divider{margin:0}.capture-toolbar kbd{display:none}}
 </style>

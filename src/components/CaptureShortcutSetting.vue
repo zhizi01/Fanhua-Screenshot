@@ -47,15 +47,15 @@ function restore() {
 </script>
 
 <template>
-  <section class="shortcut-setting" aria-label="截图快捷键" data-testid="capture-shortcut-setting">
-    <div class="shortcut-heading"><label><Keyboard :size="14" />截图快捷键</label><span class="current-shortcut">当前：<kbd data-testid="capture-shortcut-current">{{ activeLabel }}</kbd></span></div>
+  <section class="shortcut-setting" aria-label="截图快捷键">
+    <div class="shortcut-heading"><label><Keyboard :size="14" />截图快捷键</label><span class="current-shortcut">当前：<kbd>{{ activeLabel }}</kbd></span></div>
     <p class="shortcut-state" :class="{ warning: registered === false }" role="status">{{ registered === undefined ? '正在读取快捷键状态…' : registered ? '快捷键已就绪。' : reason || `${activeLabel} 暂时无法启用，请解除冲突后重试。` }}</p>
     <div class="shortcut-fields">
       <div class="modifier-field"><span class="field-label">修饰键</span><div class="modifier-options" role="group" aria-label="截图快捷键修饰键"><ACheckbox v-for="item in shortcutModifiers" :key="item.value" :aria-label="item.label" :checked="modifiers.includes(item.value)" :disabled="busy" @change="event => toggleModifier(item.value, event.target.checked)">{{ item.label }}</ACheckbox></div></div>
       <div class="main-key-field"><label class="field-label" :for="keyInputId">主键</label><ASelect :id="keyInputId" v-model:value="mainKey" aria-label="截图快捷键主键" show-search :filter-option="filterKeys" :options="shortcutKeyOptions" :disabled="busy" /></div>
     </div>
     <p v-if="warning" class="shortcut-validation" role="status">{{ warning }}</p>
-    <p v-else-if="!unchanged" class="shortcut-draft" data-testid="capture-shortcut-draft">待应用：{{ formatCaptureShortcut(draft) }}</p>
+    <p v-else-if="!unchanged" class="shortcut-draft">待应用：{{ formatCaptureShortcut(draft) }}</p>
     <div class="shortcut-actions">
       <AButton size="small" type="primary" aria-label="应用快捷键" :disabled="busy || !!warning || (unchanged && !!registered)" :loading="applying" @click="apply">应用快捷键</AButton>
       <AButton size="small" aria-label="恢复Alt + A" :disabled="busy || (savedShortcut === 'Alt+A' && draft === 'Alt+A' && !!registered)" @click="restore">恢复 Alt + A</AButton>

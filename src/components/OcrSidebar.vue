@@ -73,10 +73,10 @@ defineExpose({ revealSelection })
 
 async function copy(text: string, id = 'all', translated = false) {
   if (!text.trim() || copying.value) return
+  if (!window.fanhua) { message.info('文字复制仅在 Windows 桌面版中可用。'); return }
   copying.value = id
   try {
-    if (window.fanhua) await window.fanhua.copyText(text)
-    else await navigator.clipboard.writeText(text)
+    await window.fanhua.copyText(text)
     message.success(translated ? (id === 'all-translations' ? '已复制全部已有译文' : '已复制本段译文') : id === 'all' ? '已复制全部文字' : '已复制本段文字')
   } catch { message.error('复制失败，请选中文字后按 Ctrl+C。') }
   finally { copying.value = undefined }
@@ -87,7 +87,7 @@ function updateText(id: string, event: Event) {
 </script>
 
 <template>
-  <aside class="ocr-sidebar" aria-label="文字识别面板" data-testid="ocr-sidebar" @keydown.stop>
+  <aside class="ocr-sidebar" aria-label="文字识别面板" @keydown.stop>
     <header class="ocr-heading">
       <h2><ScanText :size="15" />识别文字 <span v-if="paragraphs.length">{{ paragraphs.length }} 段</span></h2>
       <button type="button" class="icon-button" aria-label="关闭文字识别" title="关闭文字识别与位置标记" @click="emit('close')"><X :size="15" /></button>
@@ -101,7 +101,7 @@ function updateText(id: string, event: Event) {
     <div v-if="error" class="ocr-error" role="alert">{{ error }}</div>
     <p v-else-if="paragraphs.length && !busy" class="ocr-instruction">点击图片虚线框或段落可相互定位。</p>
 
-    <section v-if="translation.open" class="translation-controls" aria-label="中英翻译设置" data-testid="translation-controls">
+    <section v-if="translation.open" class="translation-controls" aria-label="中英翻译设置">
       <div class="translation-options">
         <ASelect size="small" aria-label="翻译方向" :value="translation.direction" :options="translationDirections" @change="value => emit('translation:direction', value as TranslationDirection)" />
         <AButton v-if="translation.busy" size="small" aria-label="取消翻译" @click="emit('translation:cancel')"><X :size="12" />取消</AButton>
@@ -114,10 +114,10 @@ function updateText(id: string, event: Event) {
       <p v-else class="translation-help" role="status">{{ busy ? '识别完成后即可翻译。' : translation.notice || '译文同时显示在图片原位和原文下方，请对照核对。' }}</p>
     </section>
 
-    <div ref="list" class="paragraph-list" role="list" aria-label="识别段落" data-testid="ocr-paragraph-list" :aria-busy="busy">
+    <div ref="list" class="paragraph-list" role="list" aria-label="识别段落" :aria-busy="busy">
       <article v-for="(paragraph, index) in paragraphs" :key="paragraph.id" :ref="element => rememberItem(paragraph.id, element)"
         class="paragraph" :class="{ selected: paragraph.id === selectedId }" role="listitem"
-        :data-paragraph-id="paragraph.id" :aria-current="paragraph.id === selectedId ? 'true' : undefined">
+        :aria-current="paragraph.id === selectedId ? 'true' : undefined">
         <div class="paragraph-heading">
           <button type="button" class="paragraph-location" :aria-label="`定位第 ${index + 1} 段文字`" :aria-pressed="paragraph.id === selectedId" @click="emit('select', paragraph.id)">
             <span class="paragraph-number">{{ index + 1 }}</span><span>段落 {{ index + 1 }}</span>
@@ -131,7 +131,7 @@ function updateText(id: string, event: Event) {
           :rows="Math.max(2, Math.min(8, paragraph.text.split('\n').length + Math.floor(paragraph.text.length / 24)))" :maxlength="100000" spellcheck="false" @input="updateText(paragraph.id, $event)" />
         <button v-else type="button" class="paragraph-text" :aria-label="`选择第 ${index + 1} 段：${paragraph.text.slice(0, 60)}`" @click="emit('select', paragraph.id)">{{ paragraph.text || '此段文字已清空' }}</button>
         <p v-if="paragraph.id === selectedId" class="edit-note">可修正文字，原图保持不变。</p>
-        <div v-if="translation.open && translation.results[paragraph.id]" class="paragraph-translation" :data-testid="`translation-${paragraph.id}`">
+        <div v-if="translation.open && translation.results[paragraph.id]" class="paragraph-translation">
           <div class="translation-heading"><span>{{ translation.direction === 'en-zh' ? '中文译文' : '英文译文' }}</span><button type="button" class="icon-button copy-paragraph" :aria-label="`复制第 ${index + 1} 段译文`" title="复制本段译文" :disabled="!!copying" @click="copy(translation.results[paragraph.id]!.text, `translation-${paragraph.id}`, true)"><Copy :size="12" /></button></div>
           <p class="translation-text" :aria-label="`第 ${index + 1} 段译文`">{{ translation.results[paragraph.id]!.text }}</p>
         </div>

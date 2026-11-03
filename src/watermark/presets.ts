@@ -2,7 +2,6 @@ import type { WatermarkConfig, WatermarkPreset } from '../shared'
 import { defaultWatermark } from './render'
 import { clampNumber } from './layout'
 
-const storageKey = 'fanhua:watermark-presets:v1'
 const placements = ['top-left', 'top-center', 'top-right', 'center-left', 'center', 'center-right', 'bottom-left', 'bottom-center', 'bottom-right', 'tile']
 
 /** Explicitly copy scalar fields so no Vue proxy crosses the Electron bridge. */
@@ -24,34 +23,19 @@ export function plainWatermark(value: WatermarkConfig): WatermarkConfig {
 }
 
 export async function listPresets(): Promise<WatermarkPreset[]> {
-  if (window.fanhua) return window.fanhua.listWatermarkPresets()
-  try {
-    const parsed = JSON.parse(localStorage.getItem(storageKey) || '[]') as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((item): item is WatermarkPreset => Boolean(item && typeof item === 'object' && typeof item.id === 'string' && typeof item.name === 'string' && item.config)).slice(0, 30).map(item => ({ ...item, config: plainWatermark(item.config) }))
-  } catch { throw new Error('无法读取水印存档，请检查浏览器本地存储') }
+  if (!window.fanhua) throw new Error('水印存档仅在 Windows 桌面版中可用。')
+  return window.fanhua.listWatermarkPresets()
 }
 
 export async function savePreset(name: string, config: WatermarkConfig, id?: string): Promise<WatermarkPreset> {
   const normalized = name.trim().slice(0, 60)
   if (!normalized) throw new Error('请填写水印存档名称')
   const plain = plainWatermark(config)
-  if (window.fanhua) return window.fanhua.saveWatermarkPreset({ ...(id ? { id } : {}), name: normalized, config: plain })
-  const current = await listPresets()
-  const index = id ? current.findIndex(item => item.id === id) : -1
-  if (id && index < 0) throw new Error('该水印存档已不存在，请另存为新存档')
-  if (index < 0 && current.length >= 30) throw new Error('最多保存 30 个水印存档，请先删除不用的存档')
-  const preset = { id: id || crypto.randomUUID(), name: normalized, config: plain, updatedAt: new Date().toISOString() }
-  if (index < 0) current.unshift(preset)
-  else current[index] = preset
-  try { localStorage.setItem(storageKey, JSON.stringify(current)) }
-  catch { throw new Error('本地存储空间不足，水印存档未保存') }
-  return preset
+  if (!window.fanhua) throw new Error('水印存档仅在 Windows 桌面版中可用。')
+  return window.fanhua.saveWatermarkPreset({ ...(id ? { id } : {}), name: normalized, config: plain })
 }
 
 export async function deletePreset(id: string): Promise<void> {
-  if (window.fanhua) return window.fanhua.deleteWatermarkPreset(id)
-  const current = await listPresets()
-  try { localStorage.setItem(storageKey, JSON.stringify(current.filter(item => item.id !== id))) }
-  catch { throw new Error('无法删除水印存档，请稍后重试') }
+  if (!window.fanhua) throw new Error('水印存档仅在 Windows 桌面版中可用。')
+  return window.fanhua.deleteWatermarkPreset(id)
 }

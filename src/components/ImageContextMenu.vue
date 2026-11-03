@@ -56,7 +56,7 @@ onBeforeUnmount(() => {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" ref="menu" class="image-context-menu" :style="position" role="menu" aria-label="图片右键菜单" data-testid="image-context-menu" @keydown.stop="keyboard" @contextmenu.prevent @pointerdown.stop>
+    <div v-if="open" ref="menu" class="image-context-menu" :style="position" role="menu" aria-label="图片右键菜单" @keydown.stop="keyboard" @contextmenu.prevent @pointerdown.stop>
       <button type="button" role="menuitem" @click="execute('edit')"><Pencil :size="14" />{{ hasSelection ? '编辑选中标注' : '编辑图片' }}</button>
       <button v-if="editing" type="button" role="menuitem" @click="execute('finish')"><Check :size="14" />完成编辑</button>
       <div class="menu-separator" role="separator"></div>
