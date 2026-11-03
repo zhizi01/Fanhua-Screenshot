@@ -7,6 +7,15 @@
   ],
   "description": "繁花有图 · 轻盈、自在的桌面截图与标注工具",
   "author": "繁花有图",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhizi01/Fanhua-Screenshot.git"
+  },
+  "homepage": "https://github.com/zhizi01/Fanhua-Screenshot#readme",
+  "bugs": {
+    "url": "https://github.com/zhizi01/Fanhua-Screenshot/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
@@ -92,6 +101,14 @@
       "node_modules/webidl-conversions/**/*"
     ],
     "extraResources": [
+      {
+        "from": "LICENSE",
+        "to": "licenses/Fanhua-MIT.txt"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.md",
+        "to": "licenses/THIRD_PARTY_NOTICES.md"
+      },
       {
         "from": "resources/ocr",
         "to": "ocr"
