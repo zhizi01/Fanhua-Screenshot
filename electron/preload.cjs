@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('fanhua', Object.freeze({
   cancelCapture: () => ipcRenderer.invoke('capture:cancel'),
   getPreview: () => ipcRenderer.invoke('preview:get'),
   setPinned: pinned => ipcRenderer.invoke('preview:pin', pinned),
+  setEditing: editing => ipcRenderer.invoke('preview:editing', editing),
   saveImage: dataUrl => ipcRenderer.invoke('image:save', dataUrl),
   copyImage: dataUrl => ipcRenderer.invoke('image:copy', dataUrl),
   openImage: () => ipcRenderer.invoke('image:open'),

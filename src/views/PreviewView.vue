@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Button as AButton, InputNumber as AInputNumber, AutoComplete as AAutoComplete, Slider as ASlider, Select as ASelect, message } from 'ant-design-vue'
-import { ArrowLeft, Check, ChevronDown, Copy, Download, Flower2, Grip, Image as ImageIcon, Layers3, Maximize, Minus, MousePointer2, Pencil, Pin, PinOff, Plus, Redo2, Scan, Trash2, Type, Undo2, X } from 'lucide-vue-next'
+import { Check, ChevronDown, Copy, Download, Flower2, Grip, Image as ImageIcon, Layers3, Maximize, Minus, MousePointer2, Pencil, Pin, PinOff, Plus, Redo2, Scan, Trash2, Type, Undo2, X } from 'lucide-vue-next'
 import type { Screenshot } from '../shared'
 import { getDemoScreenshot } from '../demo'
 import { EditHistory, hitTest, imagePoint, moveLayer, normalizeRect, sequenceLabel, visualLayers, type Layer, type MosaicLayer, type NumberStyle, type Point, type TextStyle, type Tool } from '../editor/model'
@@ -47,7 +47,7 @@ const tools = [
   { id: 'marker' as const, icon: Grip, label: '序号', key: 'N' },
   { id: 'mosaic' as const, icon: Scan, label: '马赛克', key: 'M' },
 ]
-const toolHint = computed(() => ({ select: '点击选择标注，拖动调整位置', text: '点击画面添加文字，在右侧编辑内容', marker: '点击画面添加序号，可为步骤写下说明', mosaic: '拖动框选需要打码的区域' })[tool.value])
+const toolHint = computed(() => ({ select: '选中后拖动 · Delete 删除', text: '点击图片添加文字', marker: '点击图片添加序号', mosaic: '拖动框选打码区域' })[tool.value])
 let resizeObserver: ResizeObserver | undefined
 let frame = 0
 let drag: { origin: Point; layer?: Layer; moved: boolean } | undefined
@@ -69,7 +69,7 @@ function paint() {
 function fit() {
   fitMode.value = true
   if (!stage.value || !screenshot.value) return
-  scale.value = Math.max(.02, Math.min(1, (stage.value.clientWidth - 72) / screenshot.value.width, (stage.value.clientHeight - 72) / screenshot.value.height))
+  scale.value = Math.max(.02, Math.min(1, (stage.value.clientWidth - 32) / screenshot.value.width, (stage.value.clientHeight - 32) / screenshot.value.height))
   queuePaint()
 }
 function zoom(value: number) { fitMode.value = false; scale.value = Math.max(.05, Math.min(4, value)); queuePaint() }
@@ -78,6 +78,8 @@ async function toggleEditing() {
   editing.value = !editing.value
   selectedId.value = undefined
   tool.value = 'select'
+  try { await window.fanhua?.setEditing(editing.value) }
+  catch { message.error('窗口大小调整失败，仍可继续编辑') }
   await nextTick()
   if (fitMode.value) fit()
   queuePaint()
@@ -183,7 +185,7 @@ async function save() {
     else {
       const a = document.createElement('a'); a.href = dataUrl; a.download = `繁花有图-${new Date().toISOString().replace(/[:.]/g, '-')}.png`; a.click()
     }
-    saved.value = true; message.success('图片已保存，标注仍可继续编辑')
+    saved.value = true; message.success('图片已保存')
   } catch (cause) { message.error(cause instanceof Error ? cause.message : '保存失败，请重试') }
   finally { saving.value = false }
 }
@@ -193,7 +195,7 @@ async function copy() {
     const dataUrl = exportImage()
     if (window.fanhua) await window.fanhua.copyImage(dataUrl)
     else { const blob = await (await fetch(dataUrl)).blob(); await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]) }
-    message.success('已复制图片，可粘贴到聊天或文档')
+    message.success('已复制图片')
   } catch { message.error('复制失败，请使用保存图片') }
 }
 async function togglePin() {
@@ -204,7 +206,7 @@ async function close() { if (window.fanhua) await window.fanhua.closeWindow(); e
 async function minimize() { await window.fanhua?.minimizeWindow() }
 function keyDown(event: KeyboardEvent) {
   const target = event.target as HTMLElement
-  if (target.closest('input,textarea,select,[contenteditable="true"],.ant-select')) return
+  if (target.closest('input,textarea,select,[contenteditable="true"],[role="slider"],.ant-select')) return
   if (event.ctrlKey || event.metaKey) {
     if (event.key.toLowerCase() === 's') { event.preventDefault(); void save() }
     if (event.key.toLowerCase() === 'c') { event.preventDefault(); void copy() }
@@ -252,16 +254,16 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', keyDown); resizeOb
 <template>
   <div class="preview-app">
     <header class="titlebar drag-region">
-      <div class="brand"><Flower2 :size="19" /><span>繁花有图</span><i></i><span class="window-name">{{ editing ? '图片编辑' : '图片预览' }}</span></div>
+      <div class="brand"><Flower2 :size="16" /><span>繁花有图</span><span class="window-name">{{ editing ? '编辑' : '预览' }}</span><span v-if="!isDesktop" class="demo-label">演示</span></div>
       <div class="window-controls no-drag"><button class="icon-button" aria-label="最小化窗口" @click="minimize"><Minus :size="16" /></button><button class="icon-button danger" aria-label="关闭窗口不保存" title="关闭窗口，不自动保存" @click="close"><X :size="17" /></button></div>
     </header>
     <div class="preview-topbar">
-      <div class="file-identity"><span class="file-icon"><ImageIcon :size="20" /></span><div><h1>{{ editing ? '为灵感，添一笔' : '留住这一刻' }}</h1><p>{{ screenshot ? `${screenshot.width} × ${screenshot.height} px` : '正在读取图片' }} <span>·</span> {{ layers.length ? `${layers.length} 个标注` : '原始截图' }}<span v-if="!isDesktop"> · 演示图片</span></p></div></div>
+      <div class="file-identity"><ImageIcon :size="14" /><span>{{ screenshot ? `${screenshot.width} × ${screenshot.height}` : '读取图片…' }}</span><span v-if="layers.length" class="annotation-count">{{ layers.length }} 个标注</span></div>
       <div class="primary-actions">
-        <AButton :class="{ 'is-pinned': pinned }" :title="pinned ? '取消始终置顶' : '始终置于其他窗口上方'" aria-label="固定窗口" @click="togglePin"><template #icon><PinOff v-if="pinned" :size="16" /><Pin v-else :size="16" /></template><span class="action-label">{{ pinned ? '已固定' : '固定' }}</span></AButton>
-        <AButton :disabled="loading || !!error" aria-label="复制图片" title="复制图片 Ctrl+C" @click="copy"><template #icon><Copy :size="16" /></template><span class="action-label">复制</span></AButton>
-        <AButton :disabled="loading || !!error" aria-label="进入编辑模式" :class="{ 'edit-active': editing }" @click="toggleEditing"><template #icon><Check v-if="editing" :size="16" /><Pencil v-else :size="16" /></template>{{ editing ? '完成编辑' : '编辑图片' }}</AButton>
-        <AButton type="primary" :loading="saving" :disabled="loading || !!error" aria-label="保存图片" title="保存 PNG 图片 Ctrl+S" @click="save"><template #icon><Download :size="16" /></template>保存<span class="action-label">图片</span></AButton>
+        <AButton size="small" type="text" :class="{ 'is-pinned': pinned }" :title="pinned ? '取消置顶' : '固定到屏幕前方'" aria-label="固定窗口" :aria-pressed="pinned" @click="togglePin"><template #icon><PinOff v-if="pinned" :size="15" /><Pin v-else :size="15" /></template><span class="action-label">{{ pinned ? '已固定' : '固定' }}</span></AButton>
+        <AButton size="small" type="text" :disabled="loading || !!error" aria-label="复制图片" title="复制图片 Ctrl+C" @click="copy"><template #icon><Copy :size="15" /></template><span class="action-label">复制</span></AButton>
+        <AButton size="small" type="text" :disabled="loading || !!error" aria-label="进入编辑模式" :title="editing ? '完成编辑' : '编辑图片'" :class="{ 'edit-active': editing }" @click="toggleEditing"><template #icon><Check v-if="editing" :size="15" /><Pencil v-else :size="15" /></template><span class="action-label">{{ editing ? '完成' : '编辑' }}</span></AButton>
+        <AButton size="small" type="primary" :loading="saving" :disabled="loading || !!error" aria-label="保存图片" title="保存 PNG 图片 Ctrl+S" @click="save"><template #icon><Download :size="15" /></template><span class="action-label">保存</span></AButton>
       </div>
     </div>
     <div v-if="editing" class="editor-toolbar">
@@ -270,48 +272,204 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', keyDown); resizeOb
     </div>
     <main class="workspace" :class="{ editing }">
       <section class="image-workspace">
-        <div v-if="editing" class="canvas-instruction"><MousePointer2 :size="13" />{{ toolHint }}</div>
         <div ref="stage" class="image-stage" data-testid="image-stage">
-          <div v-if="loading || error" class="load-state"><ImageIcon :size="36" /><h2>{{ error || '正在准备图片…' }}</h2><p>{{ error ? '请关闭此窗口，重新截图或导入图片' : '稍等片刻，灵感马上呈现' }}</p></div>
+          <div v-if="loading || error" class="load-state"><ImageIcon :size="28" /><h2>{{ error || '正在读取图片…' }}</h2><p v-if="error">请重新截图或打开图片</p></div>
           <div v-else-if="screenshot" class="canvas-wrapper" :style="{ width: `${screenshot.width * scale}px`, height: `${screenshot.height * scale}px` }">
             <canvas ref="canvas" :width="screenshot.width" :height="screenshot.height" :style="{ width: '100%', height: '100%', cursor: !editing ? 'default' : tool === 'select' ? 'default' : 'crosshair' }" tabindex="0" role="img" aria-label="截图编辑画布" data-testid="editor-canvas" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerCancel" @dblclick="doubleClick"></canvas>
           </div>
         </div>
-        <div v-if="!editing && !loading && !error" class="preview-note"><span class="note-dot"></span>图片仅保留在此窗口，点击保存后才会写入文件<ArrowLeft :size="14" /></div>
       </section>
       <aside v-if="editing" class="inspector">
         <div class="inspector-heading"><h2>{{ selected ? '标注属性' : '工具样式' }}</h2><span>{{ selected ? '已选中' : '新建标注' }}</span></div>
         <div class="properties">
           <template v-if="inspectorType !== 'mosaic'">
-            <label v-if="selected && selected.type !== 'mosaic'" class="field-label">{{ selected.type === 'marker' ? '步骤说明' : '文字内容' }}<textarea ref="textInput" aria-label="标注文字内容" class="annotation-textarea" :value="selected.text" :placeholder="selected.type === 'marker' ? '为这个步骤写一点说明…' : '输入批注文字…'" rows="3" maxlength="4000" @input="patchText(($event.target as HTMLTextAreaElement).value)"></textarea></label>
+            <label v-if="selected && selected.type !== 'mosaic'" class="field-label">{{ selected.type === 'marker' ? '步骤说明' : '文字内容' }}<textarea ref="textInput" aria-label="标注文字内容" class="annotation-textarea" :value="selected.text" :placeholder="selected.type === 'marker' ? '说明（可选）' : '输入批注文字'" rows="2" maxlength="4000" @input="patchText(($event.target as HTMLTextAreaElement).value)"></textarea></label>
             <template v-if="inspectorType === 'marker'">
-              <label class="field-label">序号方式<ASelect aria-label="序号方式" :value="activeNumberStyle" :options="[{ value: 'number', label: '1, 2, 3 · 阿拉伯数字' }, { value: 'letter', label: 'A, B, C · 字母' }, { value: 'chinese', label: '壹, 贰, 叁 · 中文大写' }]" @change="value => patchNumberStyle(value as NumberStyle)" /></label>
-              <label v-if="selected?.type === 'marker'" class="field-label">序号数值<AInputNumber aria-label="序号数值" :value="selected.number" :min="1" :max="9999" :precision="0" @change="value => patchNumber(Number(value))" /></label>
+              <label class="field-label">序号方式<ASelect size="small" aria-label="序号方式" :value="activeNumberStyle" :options="[{ value: 'number', label: '1, 2, 3 · 阿拉伯数字' }, { value: 'letter', label: 'A, B, C · 字母' }, { value: 'chinese', label: '壹, 贰, 叁 · 中文大写' }]" @change="value => patchNumberStyle(value as NumberStyle)" /></label>
+              <label v-if="selected?.type === 'marker'" class="field-label">序号数值<AInputNumber size="small" aria-label="序号数值" :value="selected.number" :min="1" :max="9999" :precision="0" @change="value => patchNumber(Number(value))" /></label>
             </template>
-            <label class="field-label">字体<AAutoComplete aria-label="标注字体" :value="properties.font" :options="fontOptions" :filter-option="filterFonts" placeholder="选择或输入字体名称" @change="value => patchStyle('font', String(value))" /></label>
-            <div class="style-row"><label class="field-label">字号<AInputNumber aria-label="标注字号" :value="properties.size" :min="8" :max="200" :precision="0" addon-after="px" @change="value => patchStyle('size', Number(value))" /></label><label class="field-label color-label">颜色<div class="custom-color"><input type="color" aria-label="自定义标注颜色" :value="properties.color" @input="patchStyle('color', ($event.target as HTMLInputElement).value)" /><span>{{ properties.color.toUpperCase() }}</span></div></label></div>
+            <label class="field-label">字体<AAutoComplete size="small" aria-label="标注字体" :value="properties.font" :options="fontOptions" :filter-option="filterFonts" placeholder="选择或输入字体名称" @change="value => patchStyle('font', String(value))" /></label>
+            <div class="style-row"><label class="field-label">字号<AInputNumber size="small" aria-label="标注字号" :value="properties.size" :min="8" :max="200" :precision="0" addon-after="px" @change="value => patchStyle('size', Number(value))" /></label><label class="field-label color-label">颜色<div class="custom-color"><input type="color" aria-label="自定义标注颜色" :value="properties.color" @input="patchStyle('color', ($event.target as HTMLInputElement).value)" /><span>{{ properties.color.toUpperCase() }}</span></div></label></div>
             <div class="color-palette"><button v-for="color in colors" :key="color" :style="{ background: color }" :class="{ chosen: properties.color === color }" :aria-label="`颜色 ${color}`" @click="patchStyle('color', color)"><Check v-if="properties.color === color" :size="13" :color="color === '#ffffff' || color === '#f4d44d' ? '#38313c' : '#fff'" /></button></div>
-            <p class="property-tip">{{ selected ? '点击画面中的标注可再次修改，拖动可移动。' : '选择工具后点击画面，开始添加标注。' }}</p>
+            <p class="property-tip">{{ selected ? '选中标注可修改，拖动可移动。' : toolHint }}</p>
           </template>
           <template v-else>
-            <div class="mosaic-symbol"><Scan :size="28" /><div><strong>像素马赛克</strong><p>框选区域，遮住私密内容</p></div></div>
+            <div class="mosaic-symbol"><Scan :size="21" /><strong>像素马赛克</strong></div>
             <label class="field-label strength-label">打码强度<strong>{{ activeStrength }} px</strong></label><ASlider aria-label-for-handle="打码强度" :value="activeStrength" :min="4" :max="64" :step="2" @change="patchStrength" /><div class="range-labels"><span>细腻</span><span>强烈</span></div>
-            <p class="property-tip">每个打码区域独立保留。选中后可以调整强度、拖动位置，或删除恢复原图。</p>
+            <p class="property-tip">选中区域可调整强度、移动或删除。</p>
           </template>
-          <AButton v-if="selected" danger block class="delete-layer" aria-label="删除此标注" @click="deleteSelected"><template #icon><Trash2 :size="15" /></template>删除此{{ selected.type === 'mosaic' ? '打码区域' : '标注' }}</AButton>
+          <AButton v-if="selected" size="small" danger block class="delete-layer" aria-label="删除此标注" @click="deleteSelected"><template #icon><Trash2 :size="14" /></template>删除{{ selected.type === 'mosaic' ? '打码区域' : '标注' }}</AButton>
         </div>
         <div class="layers-heading"><h2><Layers3 :size="15" />标注图层</h2><span>{{ layers.length }}</span></div>
         <div class="layers-list">
-          <div v-if="!layers.length" class="layers-empty"><Layers3 :size="25" /><p>还没有标注</p><span>让你的想法清晰可见</span></div>
+          <div v-if="!layers.length" class="layers-empty">暂无标注</div>
           <button v-for="layer in layerList" :key="layer.id" class="layer-item" :class="{ selected: selectedId === layer.id }" :aria-label="`选择图层 ${layerTitle(layer)}`" @click="selectLayer(layer)"><span class="layer-type"><Type v-if="layer.type === 'text'" :size="15" /><Scan v-else-if="layer.type === 'mosaic'" :size="15" /><span v-else>{{ sequenceLabel(layer.number, layer.style) }}</span></span><span class="layer-title">{{ layerTitle(layer) }}</span><span v-if="selectedId === layer.id" class="selected-indicator"></span></button>
         </div>
         <div class="inspector-footer"><kbd>Delete</kbd> 删除 <span>·</span> <kbd>Ctrl Z</kbd> 撤销</div>
       </aside>
     </main>
-    <footer class="statusbar"><div class="image-status"><span :class="['status-dot', { unsaved: !saved }]"></span>{{ saved ? '已保存到本地' : layers.length ? '标注尚未保存' : '图片尚未保存' }}<span class="status-divider">|</span><span>{{ editing ? '所有标注均可再次编辑' : pinned ? '窗口已固定在最前方' : '随手记录，自在表达' }}</span></div><div class="zoom-controls"><button class="icon-button" aria-label="缩小图片" @click="zoom(scale / 1.2)"><Minus :size="14" /></button><button class="zoom-value" aria-label="原始大小" title="点击显示原始大小" @click="zoom(1)">{{ Math.round(scale * 100) }}%<ChevronDown :size="11" /></button><button class="icon-button" aria-label="放大图片" @click="zoom(scale * 1.2)"><Plus :size="14" /></button><i></i><button class="fit-button" :class="{ active: fitMode }" aria-label="适应窗口" @click="fit"><Maximize :size="14" />适应窗口</button></div></footer>
+    <footer class="statusbar"><div class="image-status"><span :class="['status-dot', { unsaved: !saved }]"></span><span>{{ saved ? '已保存到本地' : '未保存' }}</span><span v-if="pinned" class="pin-status">已置顶</span><span v-if="editing" class="status-hint">{{ toolHint }}</span></div><div class="zoom-controls"><button class="icon-button" aria-label="缩小图片" @click="zoom(scale / 1.2)"><Minus :size="13" /></button><button class="zoom-value" aria-label="原始大小" title="原始大小 100%" @click="zoom(1)">{{ Math.round(scale * 100) }}%<ChevronDown :size="10" /></button><button class="icon-button" aria-label="放大图片" @click="zoom(scale * 1.2)"><Plus :size="13" /></button><i></i><button class="fit-button" :class="{ active: fitMode }" aria-label="适应窗口" title="适应窗口" @click="fit"><Maximize :size="13" /><span>适应</span></button></div></footer>
   </div>
 </template>
 
 <style scoped>
-.preview-app{display:flex;flex-direction:column;height:100%;background:#f8f7fa}.titlebar{height:42px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 21px;background:#fff;border-bottom:1px solid #efedf3}.brand{display:flex;align-items:center;gap:9px;font-size:12px;font-weight:600;letter-spacing:.3px}.brand>svg{color:#8063d5}.brand i{height:12px;width:1px;background:#e4e0eb;margin:0 4px}.window-name{font-weight:400;color:#8a8494}.window-controls{display:flex;gap:3px}.window-controls .icon-button{width:32px;height:28px}.preview-topbar{height:86px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:0 25px;background:#fff;border-bottom:1px solid #eae7f0;gap:12px}.file-identity{display:flex;align-items:center;gap:12px;white-space:nowrap}.file-icon{width:43px;height:43px;border-radius:12px;background:#f0ecfb;color:#856cd1;display:flex;align-items:center;justify-content:center}.file-identity h1{margin:0 0 5px;font-size:17px;font-weight:650;letter-spacing:.5px}.file-identity p{margin:0;font-size:11px;color:#928b9d}.file-identity p span{padding:0 5px;color:#bdb7c6}.primary-actions{display:flex;align-items:center;gap:8px}.primary-actions :deep(.ant-btn){display:inline-flex;align-items:center;justify-content:center;gap:7px;font-size:12px;padding:0 13px;box-shadow:none}.primary-actions :deep(.ant-btn .ant-btn-icon){display:flex;margin:0}.primary-actions :deep(.ant-btn-primary){padding:0 17px}.is-pinned,.edit-active{color:#7860d2!important;border-color:#d4c8ef!important;background:#f8f5ff!important}.editor-toolbar{height:58px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;background:#fff;padding:0 22px;border-bottom:1px solid #eae7f0;gap:10px}.tool-list,.history-actions{display:flex;align-items:center;gap:6px}.tool-button{display:flex;align-items:center;gap:7px;border:1px solid transparent;background:transparent;border-radius:8px;color:#766e84;height:36px;padding:0 11px;font-size:12px}.tool-button kbd{font-size:9px;padding:1px 4px;min-width:15px;background:transparent;border-color:transparent;color:#a29aa9}.tool-button:hover{background:#f6f3fa}.tool-button.active{background:#f0ebfb;border-color:#e8defa;color:#785dc7}.tool-button.active kbd{color:#9f8fc8}.history-actions{gap:2px}.history-actions .icon-button:disabled{opacity:.3}.history-actions i,.zoom-controls i{height:18px;width:1px;background:#e9e5ef;margin:0 9px}.workspace{display:flex;flex:1;min-height:0;min-width:0}.image-workspace{position:relative;display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;background:#f5f4f7}.canvas-instruction{position:absolute;z-index:1;top:13px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:7px;background:#fffef2e0;border:1px solid #e8e3d8;color:#958566;box-shadow:0 2px 5px #40342604;border-radius:6px;white-space:nowrap;padding:6px 10px;font-size:11px;pointer-events:none}.image-stage{height:100%;width:100%;padding:36px;overflow:auto;display:flex;align-items:safe center;justify-content:safe center;background-image:radial-gradient(#d9d4e3 .7px,transparent .7px);background-size:12px 12px}.canvas-wrapper{flex-shrink:0;position:relative;box-shadow:0 10px 40px #3e315315,0 1px 3px #3e31531a;background:#fff;background-image:linear-gradient(45deg,#f2f1f4 25%,transparent 25%),linear-gradient(-45deg,#f2f1f4 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#f2f1f4 75%),linear-gradient(-45deg,transparent 75%,#f2f1f4 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0}.canvas-wrapper canvas{display:block;touch-action:none;outline:none}.load-state{text-align:center;color:#8d839d}.load-state>svg{color:#b1a4c8}.load-state h2{font-weight:500;font-size:17px;margin-top:20px}.load-state p{font-size:12px}.preview-note{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;border:1px solid #ebe6f2;padding:9px 14px;border-radius:7px;background:#ffffffef;color:#9c91ab;font-size:11px;white-space:nowrap;pointer-events:none}.preview-note>svg{transform:rotate(90deg);margin-left:10px;color:#b5a8cb}.note-dot{width:5px;height:5px;border-radius:50%;background:#b19ad8}.inspector{width:256px;flex-shrink:0;border-left:1px solid #e9e5ef;background:#fff;display:flex;flex-direction:column;overflow-y:auto;min-height:0}.inspector-heading{display:flex;align-items:center;justify-content:space-between;padding:20px 18px 15px}.inspector h2{font-size:12px;margin:0;font-weight:650}.inspector-heading>span{font-size:10px;color:#a39aaa;background:#f5f3f8;border:1px solid #eeebf3;padding:2px 6px;border-radius:4px}.properties{padding:0 18px 18px;flex-shrink:0}.field-label{display:flex;flex-direction:column;gap:8px;font-size:11px;color:#918898;margin-bottom:15px}.field-label :deep(.ant-select),.field-label :deep(.ant-input-number){width:100%;font-size:12px}.field-label :deep(.ant-select-selector){font-size:12px!important}.annotation-textarea{display:block;width:100%;resize:vertical;min-height:68px;max-height:150px;border:1px solid #e3dce9;border-radius:7px;padding:8px 9px;font-size:12px;line-height:1.7;color:#4b4258;background:#fefeff;outline:none}.annotation-textarea:focus{border-color:#ac93e2;box-shadow:0 0 0 2px #f2ecfc}.annotation-textarea::placeholder{color:#b1a7bb}.style-row{display:flex;gap:10px}.style-row>.field-label:first-child{width:103px}.style-row :deep(.ant-input-number-group-addon){font-size:10px;padding:0 8px;color:#b0a6bd;background:#faf8fc}.color-label{flex:1}.custom-color{height:36px;border:1px solid #d9d9d9;border-radius:9px;display:flex;align-items:center;gap:6px;padding:0 7px;overflow:hidden}.custom-color input{padding:0;border:0;background:transparent;width:20px;height:24px;flex-shrink:0;cursor:pointer}.custom-color input::-webkit-color-swatch-wrapper{padding:3px 0}.custom-color input::-webkit-color-swatch{border:0;border-radius:4px}.custom-color span{font-size:9px;color:#8f859c;font-family:Consolas,monospace}.color-palette{display:flex;justify-content:space-between;gap:4px;margin:1px 0 17px}.color-palette button{width:20px;height:20px;border-radius:50%;border:1px solid #2a203216;display:flex;align-items:center;justify-content:center;padding:0}.color-palette button.chosen{outline:2px solid #c7b9e5;outline-offset:2px}.property-tip{font-size:10px;line-height:1.8;color:#aaa0b4;margin:10px 0 0}.delete-layer{margin-top:15px;font-size:11px;display:flex;align-items:center;justify-content:center;gap:6px;box-shadow:none}.delete-layer :deep(.ant-btn-icon){display:flex}.layers-heading{border-top:1px solid #f0edf4;padding:17px 18px 12px;display:flex;align-items:center;justify-content:space-between}.layers-heading h2{display:flex;align-items:center;gap:7px}.layers-heading h2>svg{color:#9b8cae}.layers-heading>span{font-size:10px;color:#9e92ae;background:#f2eef8;min-width:18px;text-align:center;border-radius:4px;padding:1px 4px}.layers-list{padding:0 11px 12px;min-height:100px;flex:1;overflow:auto}.layers-empty{text-align:center;padding:18px 0 10px;color:#c3b8cf}.layers-empty p{font-size:11px;color:#a597b5;margin:10px 0 3px}.layers-empty span{font-size:10px;color:#bfb4ca}.layer-item{display:flex;align-items:center;gap:9px;text-align:left;border:1px solid transparent;border-radius:7px;padding:8px;width:100%;background:transparent;color:#8e819f;margin-bottom:4px}.layer-item:hover{background:#f8f5fc}.layer-item.selected{background:#f3eefc;border-color:#e9def9;color:#7b5bb8}.layer-type{width:25px;height:25px;border-radius:5px;background:#f4f1f8;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:10px;overflow:hidden}.selected .layer-type{background:#e9defa;color:#8d6ec7}.layer-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;flex:1}.selected-indicator{width:5px;height:5px;border-radius:50%;background:#9b7bd2}.inspector-footer{padding:11px 16px;border-top:1px solid #f0ecf5;color:#aaa0b5;font-size:9px;display:flex;align-items:center;justify-content:center;gap:6px;flex-shrink:0}.inspector-footer kbd{font-size:8px;min-width:0;padding:2px 4px;border-width:1px;color:#a297ae;background:#faf8fc}.inspector-footer>span{margin:0 4px}.mosaic-symbol{display:flex;align-items:center;gap:12px;padding:9px 0 18px;color:#9882b9}.mosaic-symbol strong{font-size:12px;font-weight:500;color:#71627f}.mosaic-symbol p{font-size:10px;color:#afa0be;margin:4px 0 0}.strength-label{flex-direction:row;justify-content:space-between;margin-bottom:6px}.strength-label strong{font-size:11px;color:#8a6ebb;font-weight:500}.range-labels{display:flex;justify-content:space-between;color:#b6a9c4;font-size:9px;margin-top:-3px;margin-bottom:18px}.statusbar{height:39px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;border-top:1px solid #eae5ef;background:#fff;padding:0 18px;color:#aaa0b4;font-size:10px;gap:12px}.image-status{display:flex;align-items:center;gap:7px;white-space:nowrap}.status-dot{width:5px;height:5px;border-radius:50%;background:#68b497}.status-dot.unsaved{background:#c6b3d9}.status-divider{margin:0 5px;color:#e4deeb}.zoom-controls{display:flex;align-items:center;gap:1px}.zoom-controls .icon-button{width:25px;height:25px;color:#9c8eaf}.zoom-value{border:0;background:transparent;font-size:10px;display:flex;align-items:center;gap:6px;color:#8d7c9d;min-width:53px;justify-content:center}.zoom-controls i{height:13px;margin:0 8px}.fit-button{display:flex;align-items:center;gap:6px;border:0;border-radius:4px;background:transparent;font-size:10px;color:#a496b5;padding:4px 6px}.fit-button.active{color:#9274bc;background:#f5f0fb}@media(max-width:900px){.preview-topbar{padding:0 17px}.primary-actions{gap:5px}.primary-actions :deep(.ant-btn){padding:0 9px}.action-label{display:none}.inspector{width:230px}.properties{padding:0 13px 15px}.editor-toolbar{padding:0 15px}.tool-button{padding:0 8px}.tool-button kbd{display:none}.image-status>span:last-child{display:none}}@media(max-width:650px){.file-icon{display:none}.file-identity h1{font-size:14px}.file-identity p{font-size:9px}.inspector{width:205px}.properties{padding:0 10px 14px}.statusbar{padding:0 9px}.tool-button{gap:4px;padding:0 6px}.tool-button>span{font-size:10px}.style-row{gap:5px}.style-row>.field-label:first-child{width:87px}.custom-color span{display:none}.history-actions .icon-button{width:27px}.preview-note{font-size:9px;padding:8px;max-width:90%;white-space:normal}.image-stage{padding:24px}}
+.preview-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  color: #34323b;
+  background: #f4f4f6;
+}
+.titlebar {
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 5px 0 12px;
+  background: #fafafa;
+  border-bottom: 1px solid #e6e5e9;
+}
+.brand { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 550; }
+.brand > svg { color: #7860d2; }
+.window-name { color: #797780; font-weight: 400; margin-left: 5px; }
+.demo-label { color: #8b8397; font-size: 10px; border: 1px solid #ded9e8; border-radius: 3px; padding: 0 4px; }
+.window-controls { display: flex; gap: 2px; }
+.window-controls .icon-button { width: 30px; height: 28px; border-radius: 4px; }
+.preview-topbar {
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 9px 0 13px;
+  border-bottom: 1px solid #e4e3e8;
+  background: #fff;
+}
+.file-identity { display: flex; align-items: center; gap: 7px; min-width: 0; color: #77727f; font-size: 11px; white-space: nowrap; }
+.file-identity > svg { color: #918799; }
+.annotation-count { margin-left: 7px; padding-left: 11px; border-left: 1px solid #e2dfe7; color: #8f8599; }
+.primary-actions { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.primary-actions :deep(.ant-btn) { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 27px; padding: 0 8px; font-size: 11px; border-radius: 4px; box-shadow: none; }
+.primary-actions :deep(.ant-btn .ant-btn-icon) { display: flex; margin: 0; }
+.primary-actions :deep(.ant-btn-primary) { margin-left: 3px; padding: 0 10px; }
+.is-pinned, .edit-active { color: #7154bd !important; background: #eee9f8 !important; }
+.editor-toolbar {
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid #e2e0e6;
+  background: #fafafa;
+}
+.tool-list, .history-actions { display: flex; align-items: center; gap: 4px; }
+.tool-button { display: flex; align-items: center; gap: 5px; height: 29px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #625a6c; font-size: 11px; }
+.tool-button svg { width: 16px; height: 16px; }
+.tool-button kbd { min-width: 13px; padding: 0 2px; background: transparent; border: 0; font-size: 9px; color: #96909e; }
+.tool-button:hover { background: #efedf3; }
+.tool-button.active { color: #7151b8; border-color: #ded4ef; background: #eee8f8; }
+.history-actions { gap: 1px; }
+.history-actions .icon-button { width: 28px; height: 28px; border-radius: 4px; }
+.history-actions .icon-button:disabled { opacity: .3; }
+.history-actions i, .zoom-controls i { width: 1px; height: 15px; margin: 0 6px; background: #dedbe3; }
+.workspace { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.image-workspace { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: #eeedf0; }
+.image-stage { width: 100%; height: 100%; overflow: auto; display: flex; align-items: safe center; justify-content: safe center; padding: 16px; }
+.canvas-wrapper {
+  flex-shrink: 0;
+  position: relative;
+  background-color: #fff;
+  background-image: linear-gradient(45deg,#eeedf0 25%,transparent 25%),linear-gradient(-45deg,#eeedf0 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#eeedf0 75%),linear-gradient(-45deg,transparent 75%,#eeedf0 75%);
+  background-size: 16px 16px;
+  background-position: 0 0,0 8px,8px -8px,-8px 0;
+  box-shadow: 0 0 0 1px #30204012, 0 2px 8px #30204012;
+}
+.canvas-wrapper canvas { display: block; touch-action: none; outline: none; }
+.load-state { text-align: center; color: #7d738a; }
+.load-state h2 { font-size: 13px; font-weight: 500; margin: 12px 0 7px; }
+.load-state p { font-size: 11px; }
+.inspector { width: 236px; flex-shrink: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; border-left: 1px solid #ddd9e4; background: #fff; }
+.inspector-heading { display: flex; align-items: center; justify-content: space-between; padding: 12px 13px 11px; }
+.inspector h2 { margin: 0; font-size: 12px; font-weight: 600; }
+.inspector-heading > span { font-size: 10px; color: #8e8699; }
+.properties { flex-shrink: 0; padding: 0 13px 12px; }
+.field-label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; color: #767080; font-size: 11px; }
+.field-label :deep(.ant-select), .field-label :deep(.ant-input-number) { width: 100%; font-size: 12px; }
+.field-label :deep(.ant-select-selector) { font-size: 12px !important; border-radius: 4px !important; }
+.field-label :deep(.ant-input-number) { border-radius: 4px; }
+.annotation-textarea { display: block; width: 100%; min-height: 54px; max-height: 120px; resize: vertical; border: 1px solid #d9d4df; border-radius: 4px; padding: 5px 7px; color: #40394b; background: #fff; font-size: 12px; line-height: 1.6; outline: none; }
+.annotation-textarea:focus { border-color: #9e86d0; box-shadow: 0 0 0 2px #f0eafa; }
+.annotation-textarea::placeholder { color: #a49aac; }
+.style-row { display: flex; gap: 9px; }
+.style-row > .field-label:first-child { width: 96px; }
+.style-row :deep(.ant-input-number-group-addon) { padding: 0 6px; font-size: 10px; color: #8c8198; background: #f8f7fa; }
+.color-label { flex: 1; min-width: 0; }
+.custom-color { height: 24px; display: flex; align-items: center; gap: 5px; padding: 0 5px; border: 1px solid #d9d9d9; border-radius: 4px; overflow: hidden; }
+.custom-color input { width: 18px; height: 20px; flex-shrink: 0; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.custom-color input::-webkit-color-swatch-wrapper { padding: 2px 0; }
+.custom-color input::-webkit-color-swatch { border: 0; border-radius: 2px; }
+.custom-color span { font: 9px Consolas, monospace; color: #766b82; }
+.color-palette { display: flex; justify-content: space-between; gap: 4px; margin: 2px 0 12px; }
+.color-palette button { display: flex; align-items: center; justify-content: center; width: 19px; height: 19px; padding: 0; border: 1px solid #30203f20; border-radius: 50%; }
+.color-palette button.chosen { outline: 2px solid #b6a1d6; outline-offset: 2px; }
+.property-tip { margin: 8px 0 0; font-size: 10px; line-height: 1.6; color: #8e839b; }
+.delete-layer { display: flex; align-items: center; justify-content: center; gap: 5px; height: 26px; margin-top: 10px; border-radius: 4px; font-size: 11px; box-shadow: none; }
+.delete-layer :deep(.ant-btn-icon) { display: flex; }
+.layers-heading { display: flex; align-items: center; justify-content: space-between; padding: 11px 13px 8px; border-top: 1px solid #e8e4ed; }
+.layers-heading h2 { display: flex; align-items: center; gap: 6px; }
+.layers-heading h2 > svg { color: #887b97; }
+.layers-heading > span { font-size: 10px; color: #88799a; }
+.layers-list { flex: 1; min-height: 70px; overflow: auto; padding: 0 7px 8px; }
+.layers-empty { padding: 20px 0; text-align: center; color: #a49aac; font-size: 11px; }
+.layer-item { display: flex; align-items: center; gap: 7px; width: 100%; padding: 5px 6px; margin-bottom: 2px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #796c88; text-align: left; }
+.layer-item:hover { background: #f4f1f8; }
+.layer-item.selected { border-color: #e2d7f1; background: #f0eaf8; color: #6c4da4; }
+.layer-type { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 22px; height: 22px; overflow: hidden; border-radius: 3px; background: #f0edf5; font-size: 10px; }
+.layer-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.selected-indicator { width: 4px; height: 4px; border-radius: 50%; background: #9b79cc; }
+.inspector-footer { display: flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; padding: 7px 10px; border-top: 1px solid #ebe7f0; color: #948a9f; font-size: 9px; }
+.inspector-footer kbd { min-width: 0; padding: 1px 4px; border-width: 1px; border-radius: 3px; background: #f9f8fb; color: #8a7c99; font-size: 8px; }
+.inspector-footer > span { margin: 0 3px; }
+.mosaic-symbol { display: flex; align-items: center; gap: 8px; padding: 6px 0 16px; color: #8b74ab; }
+.mosaic-symbol strong { font-size: 12px; font-weight: 500; color: #6d5e7c; }
+.strength-label { flex-direction: row; justify-content: space-between; margin-bottom: 4px; }
+.strength-label strong { color: #8266b1; font-size: 11px; font-weight: 500; }
+.range-labels { display: flex; justify-content: space-between; margin: -3px 0 12px; color: #9f90ad; font-size: 10px; }
+.statusbar { height: 26px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 9px; border-top: 1px solid #dedbe4; background: #fafafa; color: #857b92; font-size: 10px; }
+.image-status { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.status-dot { width: 4px; height: 4px; flex-shrink: 0; border-radius: 50%; background: #65a98b; }
+.status-dot.unsaved { background: #b9a3cf; }
+.pin-status { padding-left: 8px; color: #8465b4; }
+.status-hint { overflow: hidden; text-overflow: ellipsis; margin-left: 10px; color: #978d9f; }
+.zoom-controls { display: flex; align-items: center; gap: 1px; flex-shrink: 0; }
+.zoom-controls .icon-button { width: 23px; height: 22px; border-radius: 3px; color: #8d7b9e; }
+.zoom-value { display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 47px; padding: 2px; border: 0; background: transparent; color: #7e6d8e; font-size: 10px; }
+.zoom-controls i { height: 12px; margin: 0 5px; }
+.fit-button { display: flex; align-items: center; gap: 4px; padding: 3px 5px; border: 0; border-radius: 3px; background: transparent; color: #8b7b9d; font-size: 10px; }
+.fit-button.active { background: #eee8f6; color: #8160ae; }
+@media (max-width: 900px) {
+  .tool-button kbd { display: none; }
+  .annotation-count { display: none; }
+  .status-hint { display: none; }
+}
+@media (max-width: 600px) {
+  .action-label { display: none; }
+  .primary-actions :deep(.ant-btn), .primary-actions :deep(.ant-btn-primary) { width: 29px; padding: 0; margin-left: 0; }
+  .primary-actions :deep(.ant-btn > .ant-btn-icon) { margin: 0; }
+  .preview-topbar { padding: 0 7px 0 10px; }
+  .editor-toolbar { padding: 0 6px; gap: 3px; }
+  .tool-button { padding: 0 5px; gap: 4px; }
+  .history-actions .icon-button { width: 24px; }
+  .history-actions i { margin: 0 2px; }
+  .inspector { width: 220px; }
+  .properties { padding: 0 10px 10px; }
+  .style-row { gap: 6px; }
+  .style-row > .field-label:first-child { width: 90px; }
+  .custom-color span { font-size: 8px; }
+  .pin-status { display: none; }
+}
 </style>

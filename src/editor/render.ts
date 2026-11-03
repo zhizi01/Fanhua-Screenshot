@@ -69,12 +69,5 @@ export function renderSelection(context: CanvasRenderingContext2D, layer: Layer,
   context.lineWidth = 1.5 / scale
   context.setLineDash([5 / scale, 3 / scale])
   context.strokeRect(bounds.x - pad, bounds.y - pad, bounds.width + pad * 2, bounds.height + pad * 2)
-  context.setLineDash([])
-  context.fillStyle = '#ffffff'
-  const handle = 5 / scale
-  for (const [x, y] of [[bounds.x - pad, bounds.y - pad], [bounds.x + bounds.width + pad, bounds.y - pad], [bounds.x - pad, bounds.y + bounds.height + pad], [bounds.x + bounds.width + pad, bounds.y + bounds.height + pad]]) {
-    context.fillRect(x! - handle / 2, y! - handle / 2, handle, handle)
-    context.strokeRect(x! - handle / 2, y! - handle / 2, handle, handle)
-  }
   context.restore()
 }

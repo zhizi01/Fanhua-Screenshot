@@ -1,94 +1,256 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Button as AButton, Switch as ASwitch, message } from 'ant-design-vue'
-import { Aperture, ArrowUpRight, Check, ChevronRight, CircleHelp, Command, Crop, ImagePlus, Keyboard, Layers, Minus, MousePointer2, ScanLine, Settings2, ShieldCheck, Sparkles, Type, X } from 'lucide-vue-next'
+import { ChevronDown, ImagePlus, Keyboard, LogOut, ScanLine, X } from 'lucide-vue-next'
 import FlowerLogo from '../components/FlowerLogo.vue'
 import type { AppState } from '../shared'
 
-const tab = ref<'home' | 'settings' | 'about'>('home')
 const state = ref<AppState | null>(null)
-const busy = ref(false)
+const captureBusy = ref(false)
 const loginBusy = ref(false)
+const connectionError = ref('')
 const native = Boolean(window.fanhua)
-const status = computed(() => !native ? '网页演示模式' : state.value?.shortcutRegistered ? '后台已就绪' : state.value ? '快捷键被占用' : '正在连接')
-const tips = [
-  { icon: MousePointer2, title: '智能识别窗口', text: '鼠标移到窗口上，单击即可完整截取。也可以按住拖动，自由框选。', tag: '轻轻一点' },
-  { icon: Type, title: '标注，让重点更清楚', text: '文字、顺序标识和说明自由组合。字体、字号与颜色，由你决定。', tag: '清楚表达' },
-  { icon: ShieldCheck, title: '隐私，留给自己', text: '为敏感内容打上马赛克，随时调整强度；选中图层即可移除。', tag: '安心分享' },
-]
+let disposed = false
+let stateRequest = 0
+
+const shortcutState = computed(() => {
+  if (!native) return '网页演示'
+  if (connectionError.value) return '后台连接失败'
+  if (!state.value) return '正在连接后台'
+  return state.value.shortcutRegistered ? '快捷键可用' : '快捷键被占用'
+})
+const shortcutWarning = computed(() => native && state.value && !state.value.shortcutRegistered)
+
+async function refreshState() {
+  if (!window.fanhua) return
+  const request = ++stateRequest
+  try {
+    const next = await window.fanhua.getAppState()
+    if (disposed || request !== stateRequest) return
+    state.value = next
+    connectionError.value = ''
+  } catch {
+    if (!disposed && request === stateRequest) connectionError.value = '无法连接后台，请重新启动繁花有图。'
+  }
+}
+
 async function startCapture() {
-  if (busy.value) return
-  busy.value = true
+  if (captureBusy.value) return
+  captureBusy.value = true
   try {
     if (window.fanhua) await window.fanhua.startCapture()
     else location.search = '?view=capture'
-  } catch (error) { message.error(error instanceof Error ? error.message : '暂时无法截图，请重试') }
-  finally { busy.value = false }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '暂时无法截图，请重试')
+  } finally {
+    captureBusy.value = false
+  }
 }
+
 async function openImage() {
   try {
     if (window.fanhua) await window.fanhua.openImage()
-    else { sessionStorage.removeItem('fanhua:demo-screenshot'); location.search = '?view=preview' }
-  } catch { message.error('图片打开失败，请选择 PNG、JPEG 或 WebP 图片') }
+    else {
+      sessionStorage.removeItem('fanhua:demo-screenshot')
+      location.search = '?view=preview'
+    }
+  } catch {
+    message.error('图片打开失败，请选择 PNG、JPEG 或 WebP 图片')
+  }
 }
+
 async function setLogin(value: boolean | string | number) {
   if (!window.fanhua) return
   loginBusy.value = true
-  try { const enabled = await window.fanhua.setLaunchAtLogin(Boolean(value)); if (state.value) state.value.launchAtLogin = enabled }
-  catch { message.error('无法修改开机启动设置') }
-  finally { loginBusy.value = false }
+  try {
+    const enabled = await window.fanhua.setLaunchAtLogin(Boolean(value))
+    if (state.value) state.value.launchAtLogin = enabled
+  } catch (error) {
+    // Keep the previous switch value when development mode or the OS rejects it.
+    message.error(error instanceof Error ? error.message : '无法修改开机启动设置')
+  } finally {
+    loginBusy.value = false
+  }
 }
-async function windowAction(action: 'minimizeWindow' | 'hideWindow') {
-  if (window.fanhua) await window.fanhua[action]()
-  else message.info('此操作在桌面应用中可用')
+
+async function hideWindow() {
+  if (!window.fanhua) {
+    message.info('桌面版可收起到系统托盘')
+    return
+  }
+  try { await window.fanhua.hideWindow() }
+  catch { message.error('收起窗口失败，请重试') }
 }
-onMounted(async () => {
-  try { state.value = await window.fanhua?.getAppState() || null }
-  catch { message.error('后台连接失败，请重新启动繁花有图') }
+
+async function quitApp() {
+  try { await window.fanhua?.quitApp() }
+  catch { message.error('退出程序失败，请重试') }
+}
+
+onMounted(() => {
+  void refreshState()
+  window.addEventListener('focus', refreshState)
+})
+onBeforeUnmount(() => {
+  disposed = true
+  window.removeEventListener('focus', refreshState)
 })
 </script>
 
 <template>
-  <div class="dashboard">
+  <div class="utility-window">
     <header class="titlebar drag-region">
-      <div class="brand"><FlowerLogo :size="28" /><span>繁花有图</span><span class="brand-divider"></span><span class="brand-caption">让每一张图，都好好表达</span></div>
-      <div class="window-actions no-drag">
-        <button class="icon-button" aria-label="最小化" @click="windowAction('minimizeWindow')"><Minus :size="16" /></button>
-        <button class="icon-button danger" aria-label="隐藏到系统托盘" title="隐藏到系统托盘，继续后台运行" @click="windowAction('hideWindow')"><X :size="17" /></button>
+      <div class="app-title">
+        <FlowerLogo :size="24" />
+        <h1>繁花有图</h1>
+        <span class="version">{{ state?.version || '1.0.0' }}</span>
       </div>
+      <button class="icon-button danger no-drag" aria-label="隐藏到系统托盘" title="关闭设置，继续在后台运行" @click="hideWindow">
+        <X :size="17" />
+      </button>
     </header>
-    <div class="shell">
-      <aside class="sidebar">
-        <div class="workspace-label">我的工作台</div>
-        <nav aria-label="主导航">
-          <button :class="['nav-item', { active: tab === 'home' }]" @click="tab = 'home'"><ScanLine :size="18" />截图工作台<span v-if="tab === 'home'" class="nav-dot"></span></button>
-          <button :class="['nav-item', { active: tab === 'settings' }]" @click="tab = 'settings'"><Settings2 :size="18" />偏好设置</button>
-        </nav>
-        <div class="sidebar-note"><div class="note-icon"><Sparkles :size="20" /></div><strong>灵感，值得留下</strong><p>按下快捷键，<br />捕捉此刻的美好。</p><div class="shortcut"><kbd>Alt</kbd><span>+</span><kbd>A</kbd></div></div>
-        <button :class="['nav-item', 'about-link', { active: tab === 'about' }]" @click="tab = 'about'"><CircleHelp :size="17" />关于繁花有图<span class="version">v{{ state?.version || '1.0.0' }}</span></button>
-      </aside>
-      <main class="main-content">
-        <div class="page-heading"><div><div class="eyebrow">{{ tab === 'home' ? '每一个画面，都值得记录' : tab === 'settings' ? '按你的习惯来' : '很高兴，和你一起记录' }}</div><h1>{{ tab === 'home' ? '截图工作台' : tab === 'settings' ? '偏好设置' : '关于繁花有图' }}</h1></div><div :class="['status', { warning: native && state && !state.shortcutRegistered }]"><span></span>{{ status }}</div></div>
-        <template v-if="tab === 'home'">
-          <section class="hero-card">
-            <div class="hero-copy"><div class="hero-kicker"><span class="tiny-line"></span> CAPTURE YOUR MOMENT</div><h2>随手一截，<br />让想法<span>跃然图上。</span></h2><p>从一张截图开始，把重点标出来，<br />把灵感留下来，让沟通更简单。</p><div class="hero-actions"><AButton type="primary" size="large" :loading="busy" @click="startCapture"><template #icon><ScanLine :size="18" /></template>开始截图 <span class="button-shortcut">Alt + A</span></AButton><button class="open-image" @click="openImage"><ImagePlus :size="17" />{{ native ? '打开图片' : '体验图片编辑' }}<ArrowUpRight :size="15" /></button></div></div>
-            <div class="hero-art" aria-hidden="true"><div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div><div class="art-spark spark-one">+</div><div class="art-spark spark-two">+</div><div class="mini-window"><div class="mini-top"><i></i><i></i><i></i><span>生活的切片</span></div><div class="mini-content"><div class="mini-label">SLOW DOWN, LOOK AROUND.</div><div class="mini-title">收集日常里的<br />小小美好</div><div class="landscape"><div class="sun"></div><div class="mountain back"></div><div class="mountain front"></div></div><div class="mini-lines"><i></i><i></i></div></div><div class="selection-border"><i></i><i></i><i></i><i></i><div class="selection-size">640 × 420</div></div></div><div class="art-caption"><span class="caption-dot">1</span>让喜欢的瞬间，留下来</div><div class="art-tools"><Crop :size="15" /><Type :size="15" /><Layers :size="15" /><span></span><Check :size="16" /></div><MousePointer2 class="art-cursor" :size="29" fill="#7860d2" /></div>
-          </section>
-          <div class="section-heading"><h3>小工具，也有大用处</h3><span>简单几步，表达更进一步</span></div>
-          <section class="feature-grid"><article v-for="(tip, index) in tips" :key="tip.title" class="feature-card"><div class="feature-top"><div :class="['feature-icon', `tone-${index}`]"><component :is="tip.icon" :size="21" /></div><span>{{ tip.tag }}</span></div><h4>{{ tip.title }}</h4><p>{{ tip.text }}</p></article></section>
-          <section class="background-note"><div class="background-icon"><Command :size="20" /></div><div><strong>安静待在后台，随时为你准备</strong><p>关闭工作台后仍可用 Alt + A 截图，右键托盘图标可完全退出。</p></div><button @click="tab = 'settings'" aria-label="前往偏好设置"><ChevronRight :size="20" /></button></section>
-          <footer><span>留住画面，也留住灵感。</span><span><span class="footer-dot"></span>所有图片仅在本地处理</span></footer>
-        </template>
-        <template v-else-if="tab === 'settings'">
-          <section class="settings-card"><div class="settings-title"><Keyboard :size="21" /><h3>截图快捷键</h3></div><div class="setting-row"><div><strong>全局截图</strong><p>在任意应用中按下快捷键，即可开始截图。</p></div><div class="shortcut"><kbd>Alt</kbd><span>+</span><kbd>A</kbd></div></div><div v-if="state && !state.shortcutRegistered" class="shortcut-warning">Alt + A 已被其他应用占用。请解除冲突后重新启动繁花有图；你仍可从工作台或托盘开始截图。</div><div class="setting-row"><div><strong>开机时自动启动</strong><p>启动后常驻系统托盘，随时响应截图快捷键。</p></div><ASwitch aria-label="开机时自动启动" :checked="state?.launchAtLogin || false" :loading="loginBusy" :disabled="!native" @change="setLogin" /></div></section>
-          <section class="settings-card"><div class="settings-title"><MousePointer2 :size="21" /><h3>操作指南</h3></div><div class="help-row"><span>智能截取整个窗口</span><span>移动鼠标识别窗口后单击</span></div><div class="help-row"><span>自由框选区域</span><span>按住鼠标左键拖动</span></div><div class="help-row"><span>取消当前截图</span><span><kbd>Esc</kbd> 或鼠标右键</span></div><div class="help-row"><span>保存 / 复制图片</span><span><kbd>Ctrl + S</kbd> / <kbd>Ctrl + C</kbd></span></div><div class="help-row"><span>撤销 / 重做标注</span><span><kbd>Ctrl + Z</kbd> / <kbd>Ctrl + Y</kbd></span></div><div class="help-row"><span>移除选中的标注</span><span><kbd>Delete</kbd> / <kbd>Backspace</kbd></span></div></section>
-        </template>
-        <section v-else class="about-card"><FlowerLogo :size="76" /><h2>繁花有图</h2><p class="about-slogan">捕捉此刻，让表达自然发生。</p><span class="version-badge">版本 {{ state?.version || '1.0.0' }}</span><div class="about-divider"></div><p>一款安静、轻盈的桌面截图工具。<br />截取画面、标注重点、保护隐私，<br />让每一次分享都恰到好处。</p><div class="privacy-note"><ShieldCheck :size="17" />本地处理 · 无需登录 · 不上传图片</div><AButton @click="startCapture"><template #icon><Aperture :size="16" /></template>开始记录</AButton></section>
-      </main>
-    </div>
+
+    <main class="settings-body">
+      <section aria-label="截图快捷键">
+        <div class="shortcut-row">
+          <div>
+            <h2>截图快捷键</h2>
+            <div :class="['shortcut-status', { warning: shortcutWarning || connectionError, ready: state?.shortcutRegistered }]" role="status">
+              <span class="status-dot"></span>{{ shortcutState }}
+            </div>
+          </div>
+          <div class="key-combination" aria-label="Alt 加 A"><kbd>Alt</kbd><span>+</span><kbd>A</kbd></div>
+        </div>
+        <p v-if="shortcutWarning" class="inline-warning">Alt + A 已被其他应用占用。解除冲突后，右键托盘图标重试；也可点击下方按钮截图。</p>
+        <p v-if="connectionError" class="inline-warning">{{ connectionError }}</p>
+        <div class="capture-actions">
+          <AButton type="primary" :loading="captureBusy" @click="startCapture"><template #icon><ScanLine :size="17" /></template>开始截图</AButton>
+          <AButton @click="openImage"><template #icon><ImagePlus :size="17" /></template>{{ native ? '打开图片' : '打开演示图片' }}</AButton>
+        </div>
+      </section>
+
+      <section class="startup-setting" aria-label="启动设置">
+        <div>
+          <label id="launch-label">开机时自动启动</label>
+          <p>启动后驻留系统托盘，不打开窗口。</p>
+        </div>
+        <ASwitch aria-labelledby="launch-label" aria-label="开机时自动启动" :checked="state?.launchAtLogin || false" :loading="loginBusy" :disabled="!native || !state || state.platform !== 'win32'" @change="setLogin" />
+      </section>
+
+      <details class="operation-help">
+        <summary><Keyboard :size="16" /><span>快捷键与操作</span><ChevronDown class="disclosure-icon" :size="14" /></summary>
+        <dl>
+          <div><dt>截取窗口 / 区域</dt><dd>单击窗口 / 按住鼠标拖动</dd></div>
+          <div><dt>取消截图</dt><dd><kbd>Esc</kbd> 或鼠标右键</dd></div>
+          <div><dt>保存 / 复制</dt><dd><kbd>Ctrl S</kbd> / <kbd>Ctrl C</kbd></dd></div>
+          <div><dt>撤销 / 重做</dt><dd><kbd>Ctrl Z</kbd> / <kbd>Ctrl Y</kbd></dd></div>
+          <div><dt>删除标注</dt><dd>选中后按 <kbd>Delete</kbd></dd></div>
+        </dl>
+      </details>
+      <p class="background-note">关闭此窗口后仍可截图。双击托盘图标可再次打开设置。</p>
+    </main>
+
+    <footer class="window-footer">
+      <button class="exit-button" :disabled="!native" @click="quitApp"><LogOut :size="14" />退出程序</button>
+      <AButton class="tray-button" @click="hideWindow">收起到托盘</AButton>
+    </footer>
   </div>
 </template>
 
 <style scoped>
-.dashboard{height:100%;display:flex;flex-direction:column;background:#f8f7fa}.titlebar{height:57px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:0 16px 0 22px;background:white}.brand{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:650;letter-spacing:1px}.brand-divider{width:1px;height:14px;background:#e5e1ec;margin:0 3px}.brand-caption{font-size:11px;letter-spacing:.5px;font-weight:400;color:#8d8798}.window-actions{display:flex;gap:5px}.shell{display:flex;flex:1;min-height:0}.sidebar{width:190px;flex-shrink:0;border-right:1px solid var(--line);background:white;display:flex;flex-direction:column;padding:29px 14px 16px}.workspace-label{font-size:10px;letter-spacing:1.6px;color:#9b93a5;margin:0 14px 16px}.nav-item{border:0;background:transparent;display:flex;align-items:center;gap:12px;width:100%;height:43px;padding:0 13px;border-radius:8px;color:#797180;font-size:12px;margin-bottom:7px;text-align:left;white-space:nowrap}.nav-item:hover{background:#f7f5fb}.nav-item.active{background:#f0ecfa;color:#775dc8;font-weight:600}.nav-dot{width:5px;height:5px;border-radius:50%;background:var(--accent);margin-left:auto}.sidebar-note{margin:54px 8px 0;background:linear-gradient(150deg,#f8f6fc,#f3f0fa);border:1px solid #eee8f7;border-radius:12px;padding:19px 16px}.note-icon{color:#9c84cc;margin-bottom:15px}.sidebar-note strong{font-size:12px;font-weight:550}.sidebar-note p{font-size:11px;line-height:1.9;color:#93899f;margin:9px 0 15px}.shortcut{display:flex;align-items:center;gap:7px;color:#aaa1b4;font-size:11px}.about-link{margin-top:auto;margin-bottom:0;font-size:11px;gap:8px}.version{font-size:9px;color:#aaa1b4;margin-left:auto}.main-content{padding:30px 35px 16px;flex:1;min-width:0;overflow-y:auto;max-width:1600px}.page-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}.eyebrow{color:#9a91a4;font-size:10px;letter-spacing:1.4px;margin-bottom:8px}h1{font-size:23px;letter-spacing:1px;margin:0;font-weight:650}.status{display:flex;align-items:center;gap:7px;color:#7d7589;background:white;padding:7px 11px;border:1px solid #eae5f0;border-radius:20px;font-size:10px}.status>span{height:6px;width:6px;border-radius:50%;background:#6da98a;box-shadow:0 0 0 3px #eef6f1}.status.warning>span{background:#d49a44;box-shadow:0 0 0 3px #fcf4e8}.hero-card{min-height:300px;background:#f1edf8;border:1px solid #e9e1f3;border-radius:15px;display:flex;position:relative;overflow:hidden}.hero-copy{padding:32px 29px;position:relative;z-index:1;flex:1}.hero-kicker{font-size:9px;letter-spacing:1.6px;color:#9682b7;display:flex;align-items:center;gap:8px}.tiny-line{width:18px;height:1px;background:#ad9aca}.hero-copy h2{font-size:30px;line-height:1.55;letter-spacing:1px;font-weight:600;color:#3b304c;margin:16px 0 10px}.hero-copy h2 span{color:#8061b9}.hero-copy p{font-size:12px;line-height:1.9;color:#95869f;margin:0 0 23px}.hero-actions{display:flex;align-items:center;gap:16px;white-space:nowrap}.hero-actions :deep(.ant-btn){display:flex;align-items:center;gap:7px;font-size:12px;height:40px;padding:0 14px;border-radius:8px;box-shadow:0 5px 12px #7860d220}.button-shortcut{font-size:10px;border-left:1px solid #ffffff45;padding-left:10px;margin-left:3px;color:#eee6ff}.open-image{border:0;background:none;padding:5px 0;display:flex;align-items:center;gap:7px;font-size:11px;color:#857294}.open-image:hover{color:#634aa4}.hero-art{width:42%;min-width:240px;position:relative;display:flex;align-items:center;justify-content:center;padding:20px 25px 35px 0}.mini-window{width:235px;height:210px;border:1px solid #fdfbff;background:#fdfbff;border-radius:9px;box-shadow:0 15px 40px #9981bc22;transform:rotate(-5deg);position:relative;z-index:1}.mini-top{height:25px;border-bottom:1px solid #efeaf5;display:flex;align-items:center;gap:4px;padding:0 10px}.mini-top i{width:4px;height:4px;border-radius:50%;background:#decde6}.mini-top i:first-child{background:#d4bddc}.mini-top span{font-size:6px;margin-left:8px;color:#a89aaf;letter-spacing:1px}.mini-content{padding:17px 20px}.mini-label{font-size:5px;letter-spacing:1px;color:#b6a4c3}.mini-title{font-size:17px;line-height:1.4;margin-top:6px;color:#6b527f;letter-spacing:2px}.landscape{height:65px;overflow:hidden;position:relative;border-radius:4px;background:#f0e8f6;margin-top:11px}.sun{background:#ddcce8;width:18px;height:18px;border-radius:50%;position:absolute;right:35px;top:8px}.mountain{position:absolute;bottom:-20px;width:150px;height:70px;transform:rotate(-32deg);background:#d2c3e1;border-radius:16px}.mountain.back{left:-35px;bottom:-30px}.mountain.front{background:#bba9ce;right:-18px;bottom:-40px}.mini-lines{margin-top:11px;display:flex;gap:5px;flex-direction:column}.mini-lines i{height:3px;width:80%;background:#eee7f3;border-radius:5px}.mini-lines i:last-child{width:50%}.selection-border{position:absolute;inset:40px 10px 13px;border:1px dashed #9974cb}.selection-border>i{width:5px;height:5px;background:#fff;border:1px solid #9470c4;position:absolute}.selection-border>i:nth-child(1){left:-3px;top:-3px}.selection-border>i:nth-child(2){right:-3px;top:-3px}.selection-border>i:nth-child(3){right:-3px;bottom:-3px}.selection-border>i:nth-child(4){left:-3px;bottom:-3px}.selection-size{position:absolute;top:-16px;left:0;font-size:6px;background:#9877c1;color:#fff;border-radius:2px;padding:1px 4px}.art-caption{position:absolute;bottom:56px;left:-9px;font-size:10px;background:#fff;padding:9px 13px;border-radius:7px;box-shadow:0 6px 20px #8461b11c;color:#87679f;z-index:2;transform:rotate(-3deg);display:flex;align-items:center;gap:8px;border:1px solid #ede5f5}.caption-dot{background:#aa87c8;border-radius:50%;font-size:8px;color:white;display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px}.art-tools{position:absolute;right:24px;bottom:38px;display:flex;align-items:center;gap:13px;background:#fff;border:1px solid #eee7f5;padding:10px 14px;border-radius:7px;box-shadow:0 8px 20px #8461b114;color:#9b83b2;z-index:3;transform:rotate(4deg)}.art-tools span{width:1px;height:13px;background:#e9e1f1}.art-tools svg:last-child{color:#8daf9b}.art-cursor{position:absolute;right:14px;bottom:88px;stroke:#fff;z-index:4;filter:drop-shadow(0 2px 2px #89709c44)}.art-orbit{position:absolute;border:1px solid #dfd4ec;border-radius:50%;opacity:.5;width:260px;height:260px}.orbit-two{width:340px;height:340px}.art-spark{position:absolute;color:#b8a2cc;font-size:21px;font-weight:200}.spark-one{left:2px;top:35px}.spark-two{right:14px;bottom:142px}.section-heading{display:flex;align-items:center;justify-content:space-between;margin:25px 0 13px}.section-heading h3{font-size:13px;margin:0;font-weight:600}.section-heading>span{font-size:10px;color:#a098a9}.feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:13px}.feature-card{background:#fff;border:1px solid #eae6ef;border-radius:11px;padding:17px 18px}.feature-top{display:flex;align-items:center;justify-content:space-between}.feature-top>span{font-size:9px;color:#a59aaa}.feature-icon{width:35px;height:35px;display:flex;align-items:center;justify-content:center;border-radius:10px;background:#f1ecfb;color:#9277bc}.tone-1{background:#edf3f1;color:#76a091}.tone-2{background:#fbf1e8;color:#c39c74}.feature-card h4{font-size:12px;font-weight:600;margin:14px 0 8px}.feature-card p{font-size:10px;color:#99909f;line-height:1.85;margin:0}.background-note{margin-top:19px;display:flex;align-items:center;padding:14px 16px;border:1px dashed #e4dfeb;border-radius:10px;gap:13px}.background-icon{width:35px;height:35px;background:#f0edf6;display:flex;align-items:center;justify-content:center;border-radius:9px;color:#a396b9}.background-note strong{font-size:11px;font-weight:500;color:#7a6f89}.background-note p{font-size:10px;color:#aaa0b4;margin:5px 0 0}.background-note button{margin-left:auto;border:0;background:none;color:#a79bb5;padding:6px}.background-note button:hover{color:var(--accent)}footer{display:flex;justify-content:space-between;color:#b3aabf;font-size:9px;margin-top:19px;letter-spacing:.4px}footer>span:last-child{display:flex;align-items:center;gap:5px}.footer-dot{width:4px;height:4px;border-radius:50%;background:#b8b0c1}.settings-card{border:1px solid var(--line);background:white;border-radius:12px;padding:23px 25px;margin-bottom:20px}.settings-title{display:flex;align-items:center;gap:11px;color:#8d78b2;margin-bottom:8px}.settings-title h3{font-size:15px;margin:0;color:var(--text)}.setting-row{display:flex;align-items:center;justify-content:space-between;padding:23px 0;border-bottom:1px solid #f1edf6;gap:20px}.setting-row:last-child{border-bottom:0;padding-bottom:5px}.setting-row strong{font-size:13px;font-weight:500}.setting-row p{font-size:11px;color:#9d92a7;margin:7px 0 0}.help-row{display:flex;align-items:center;justify-content:space-between;padding:16px 0;border-bottom:1px solid #f2eff6;font-size:12px}.help-row:last-child{border-bottom:0}.help-row>span:last-child{color:#9b91a7;font-size:11px}.shortcut-warning{padding:12px;background:#fff8eb;border-radius:8px;color:#a67c39;font-size:12px;line-height:1.8}.about-card{text-align:center;background:white;border:1px solid var(--line);border-radius:16px;padding:46px 25px}.about-card h2{font-size:26px;letter-spacing:4px;margin:21px 0 11px}.about-slogan{font-size:13px;color:#a297ac}.version-badge{display:inline-block;border:1px solid #eee7f7;border-radius:20px;font-size:11px;color:#a491b8;padding:5px 12px;margin:10px 0}.about-divider{height:1px;background:#ede8f2;width:60px;margin:24px auto}.about-card>p:not(.about-slogan){font-size:12px;line-height:2.2;color:#9b8faa}.privacy-note{display:flex;align-items:center;justify-content:center;gap:7px;font-size:11px;color:#9c8dae;margin:25px 0}.about-card :deep(.ant-btn){display:inline-flex;align-items:center;gap:6px;font-size:12px}@media(min-width:1250px){.main-content{padding:35px 45px 20px}.hero-card{min-height:330px}.hero-copy{padding:36px}.hero-copy h2{font-size:35px}.hero-art{width:45%}.mini-window{transform:scale(1.15) rotate(-5deg)}.feature-card{padding:22px}.hero-actions{gap:22px}}@media(max-width:950px){.sidebar{width:164px;padding:25px 10px 12px}.main-content{padding:25px 22px 15px}.hero-copy{padding:27px 23px}.hero-copy h2{font-size:26px}.hero-art{min-width:190px;transform:scale(.88);transform-origin:center}.hero-actions{gap:10px}.button-shortcut{display:none}.feature-card{padding:15px 13px}.hero-card{min-height:290px}.hero-copy p{font-size:11px}}@media(max-width:720px){.sidebar{width:65px;padding:25px 6px}.workspace-label,.sidebar-note,.nav-item .version{display:none}.nav-item{font-size:0;padding:0;justify-content:center;gap:0}.nav-dot{display:none}.hero-art{display:none}.brand-caption,.brand-divider{display:none}.hero-copy{padding:26px}.hero-card{min-height:auto}.feature-grid{grid-template-columns:1fr}.feature-card{padding:17px}.feature-card p{font-size:12px}.feature-top>span{font-size:11px}.section-heading>span{display:none}.main-content{padding:22px 18px}.background-note p{line-height:1.8}.help-row{gap:20px}.about-card{padding:25px 15px}}
+.utility-window {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: #fafafa;
+  color: #303039;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 47px;
+  padding: 0 10px 0 16px;
+  background: #fff;
+  border-bottom: 1px solid #e9e8ed;
+}
+
+.app-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+h1 { margin: 0; font-size: 13px; font-weight: 600; }
+.version { margin-left: 2px; color: #95919d; font-size: 10px; }
+.titlebar .icon-button { width: 30px; height: 28px; border-radius: 5px; }
+
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  padding: 24px 24px 14px;
+  overflow-y: auto;
+}
+
+.shortcut-row,
+.startup-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+h2 { margin: 0 0 9px; font-size: 14px; font-weight: 600; }
+
+.shortcut-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #77737e;
+  font-size: 11px;
+}
+
+.status-dot { width: 5px; height: 5px; border-radius: 50%; background: #a7a1b1; }
+.ready .status-dot { background: #4e9b74; }
+.warning { color: #9b6c2c; }
+.warning .status-dot { background: #c28b39; }
+
+.key-combination { display: flex; align-items: center; gap: 8px; color: #9b96a2; font-size: 12px; }
+.key-combination kbd { min-width: 38px; height: 34px; border-radius: 6px; font-size: 14px; color: #514b5c; }
+
+.capture-actions { display: flex; gap: 10px; margin-top: 19px; }
+.capture-actions :deep(.ant-btn) { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 37px; font-size: 12px; box-shadow: none; }
+.capture-actions :deep(.ant-btn-icon) { display: flex; margin: 0; }
+.inline-warning { margin: 12px 0 0; padding: 9px 10px; border-radius: 5px; background: #fff4e3; color: #8e692f; font-size: 11px; line-height: 1.7; }
+
+.startup-setting { margin-top: 23px; padding: 20px 0; border-top: 1px solid #e9e7ed; border-bottom: 1px solid #e9e7ed; }
+.startup-setting label { font-size: 12px; font-weight: 500; }
+.startup-setting p { margin: 6px 0 0; color: #85808e; font-size: 11px; }
+
+.operation-help { margin-top: 15px; font-size: 11px; }
+.operation-help summary { display: flex; align-items: center; gap: 7px; padding: 5px 0; color: #77717f; list-style: none; cursor: pointer; }
+.operation-help summary::-webkit-details-marker { display: none; }
+.operation-help summary:hover { color: #574572; }
+.disclosure-icon { margin-left: auto; transition: transform .15s; }
+.operation-help[open] .disclosure-icon { transform: rotate(180deg); }
+.operation-help dl { margin: 11px 0 2px; color: #6d6676; }
+.operation-help dl>div { display: flex; align-items: center; justify-content: space-between; min-height: 29px; gap: 15px; }
+.operation-help dt { font-weight: 400; }
+.operation-help dd { margin: 0; color: #837b8e; }
+.operation-help kbd { min-width: 0; padding: 1px 4px; font-size: 10px; border-width: 1px; }
+.background-note { margin: 13px 0 0; color: #8b8593; font-size: 10px; line-height: 1.7; }
+
+.window-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 59px; padding: 10px 24px; border-top: 1px solid #e9e7ed; background: #f5f4f7; }
+.exit-button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 0; color: #807887; background: none; border: 0; font-size: 11px; }
+.exit-button:hover:not(:disabled) { color: #b64e59; }
+.exit-button:disabled { color: #b5afbd; }
+.tray-button { height: 32px; font-size: 11px; box-shadow: none; }
+
+@media (max-width: 500px) {
+  .settings-body { padding: 20px 20px 12px; }
+  .window-footer { padding: 10px 20px; }
+  .startup-setting { margin-top: 19px; padding: 17px 0; }
+}
 </style>

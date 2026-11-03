@@ -4,6 +4,7 @@ const path = require('node:path')
 const fs = require('node:fs/promises')
 const { randomUUID } = require('node:crypto')
 const { NativeHelper } = require('./native-helper.cjs')
+const { watchCaptureWindow } = require('./capture-lifecycle.cjs')
 const { selectionToPixels, intersectRect, decodePngDataUrl } = require('./geometry.cjs')
 
 app.setName('繁花有图')
@@ -44,7 +45,7 @@ function createIcon() {
 
 function makeWindow(view, options = {}) {
   const win = new BrowserWindow({
-    width: 1080, height: 740, minWidth: 760, minHeight: 560,
+    width: 1140, height: 820, minWidth: 840, minHeight: 620,
     show: false, frame: false, backgroundColor: '#f6f5f8', title: '繁花有图',
     icon: createIcon(), autoHideMenuBar: true,
     ...options,
@@ -67,6 +68,12 @@ function makeWindow(view, options = {}) {
     }
   })
   const webContentsId = win.webContents.id
+  if (view === 'capture') {
+    watchCaptureWindow(win, () => captures.get(webContentsId), () => captureSession, (current, reason) => {
+      finishSession(current)
+      showError(new Error(reason))
+    })
+  }
   win.on('closed', () => {
     managedWindows.delete(webContentsId)
     previews.delete(webContentsId)
@@ -92,7 +99,7 @@ async function openDashboard() {
     dashboard.show(); dashboard.focus()
     return
   }
-  dashboard = makeWindow('dashboard')
+  dashboard = makeWindow('dashboard', { width: 560, height: 460, minWidth: 480, minHeight: 420, maximizable: false })
   const win = dashboard
   win.on('close', event => {
     if (!quitting) { event.preventDefault(); win.hide() }
@@ -118,7 +125,7 @@ function updateTray() {
   tray.setToolTip(`繁花有图 · ${shortcutRegistered ? 'Alt + A 截图' : '快捷键被占用'}`)
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '开始截图', accelerator: SHORTCUT, click: () => void startCapture().catch(showError) },
-    { label: '打开繁花有图', click: () => void openDashboard().catch(showError) },
+    { label: '设置…', click: () => void openDashboard().catch(showError) },
     { label: '打开图片…', click: () => void openImage().catch(showError) },
     { type: 'separator' },
     { label: shortcutRegistered ? 'Alt + A 已启用' : 'Alt + A 被占用 · 点击重试', enabled: !shortcutRegistered, click: registerShortcut },
@@ -253,10 +260,10 @@ async function openPreview(image) {
   const size = image.getSize()
   if (size.width * size.height > 100000000) throw new Error('图片尺寸过大，最多支持一亿像素')
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-  const width = Math.min(display.workArea.width, Math.max(900, Math.min(1320, size.width + 80)))
-  const height = Math.min(display.workArea.height, Math.max(660, Math.min(900, size.height + 140)))
+  const width = Math.min(display.workArea.width, Math.max(420, Math.min(1280, size.width + 32)))
+  const height = Math.min(display.workArea.height, Math.max(260, Math.min(900, size.height + 132)))
   const win = makeWindow('preview', {
-    width, height, minWidth: Math.min(760, display.workArea.width), minHeight: Math.min(540, display.workArea.height),
+    width, height, minWidth: Math.min(360, display.workArea.width), minHeight: Math.min(240, display.workArea.height),
     x: Math.round(display.workArea.x + (display.workArea.width - width) / 2),
     y: Math.round(display.workArea.y + (display.workArea.height - height) / 2),
   })
@@ -335,6 +342,19 @@ function installIpc() {
     win.setAlwaysOnTop(pinned, 'floating')
     return win.isAlwaysOnTop()
   })
+  trustedHandler('preview:editing', ['preview'], (win, editing) => {
+    if (typeof editing !== 'boolean') throw new Error('编辑状态无效')
+    const bounds = win.getBounds()
+    const work = screen.getDisplayMatching(bounds).workArea
+    const minWidth = Math.min(editing ? 760 : 360, work.width)
+    const minHeight = Math.min(editing ? 500 : 240, work.height)
+    win.setMinimumSize(minWidth, minHeight)
+    if (editing) {
+      const width = Math.max(minWidth, Math.min(bounds.width, work.width))
+      const height = Math.max(minHeight, Math.min(bounds.height, work.height))
+      win.setBounds({ width, height, x: Math.max(work.x, Math.min(bounds.x, work.x + work.width - width)), y: Math.max(work.y, Math.min(bounds.y, work.y + work.height - height)) })
+    }
+  })
   trustedHandler('image:save', ['preview'], async (win, dataUrl) => {
     const buffer = decodePngDataUrl(dataUrl)
     const image = nativeImage.createFromBuffer(buffer)
@@ -377,6 +397,7 @@ else {
     registerShortcut()
     void helper.start().catch(() => { /* Manual area capture remains available. */ })
     screen.on('display-removed', cancelCapture)
+    screen.on('display-added', cancelCapture)
     screen.on('display-metrics-changed', cancelCapture)
     if (process.argv.includes('--show-window')) await openDashboard()
   }).catch(showError)

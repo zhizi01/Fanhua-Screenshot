@@ -39,6 +39,7 @@ export interface DesktopAPI {
   cancelCapture(): Promise<void>
   getPreview(): Promise<Screenshot>
   setPinned(pinned: boolean): Promise<boolean>
+  setEditing(editing: boolean): Promise<void>
   saveImage(dataUrl: string): Promise<{ canceled: boolean; filePath?: string }>
   copyImage(dataUrl: string): Promise<void>
   openImage(): Promise<void>
