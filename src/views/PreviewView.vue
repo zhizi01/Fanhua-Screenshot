@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Button as AButton, InputNumber as AInputNumber, Slider as ASlider, Select as ASelect, message } from 'ant-design-vue'
-import { ArrowUpRight, Check, ChevronDown, Copy, Download, Flower2, Grip, Image as ImageIcon, Languages, Layers3, Maximize, Minus, MousePointer2, Pencil, Pin, PinOff, Plus, Redo2, RefreshCw, Scan, ScanText, Stamp, Trash2, Type, Undo2, X } from 'lucide-vue-next'
-import type { ImageFormat, ImageSaveOptions, Screenshot, WatermarkConfig } from '../shared'
+import { ArrowUpRight, Check, ChevronDown, Circle, Copy, Download, Flower2, Grip, Image as ImageIcon, Languages, Layers3, Maximize, Minus, MousePointer2, Pencil, Pin, PinOff, Plus, Redo2, RefreshCw, Scan, ScanText, Square, Stamp, Trash2, Type, Undo2, X } from 'lucide-vue-next'
+import type { ImageFormat, ImageSaveOptions, OcrCapabilities, OcrParagraph, Screenshot, WatermarkConfig } from '../shared'
 import { getDemoScreenshot } from '../demo'
-import { arrowEndpointAt, DocumentHistory, hitTest, imagePoint, markerDiameter, moveLayer, normalizeRect, sequenceLabel, visualLayers, type ArrowLayer, type EditorDocument, type Layer, type MosaicLayer, type NumberStyle, type Point, type TextStyle, type Tool } from '../editor/model'
-import { canvasFont, paintArrow, renderScene, renderSelection, textMeasure } from '../editor/render'
+import { arrowEndpointAt, DocumentHistory, hitTest, imagePoint, markerDiameter, moveLayer, normalizeRect, resizeShape, sequenceLabel, shapeHandleAt, shapeRect, visualLayers, type ArrowLayer, type BorderStyle, type EditorDocument, type Layer, type MosaicLayer, type NumberStyle, type Point, type ShapeHandle, type ShapeLayer, type TextStyle, type Tool } from '../editor/model'
+import { canvasFont, paintArrow, paintShape, renderScene, renderSelection, textMeasure } from '../editor/render'
 import { encodeBmp } from '../editor/export'
 import { defaultWatermark, loadWatermarkImage } from '../watermark/render'
 import SaveExportDialog from '../components/SaveExportDialog.vue'
-import OcrDialog from '../components/OcrDialog.vue'
+import OcrSidebar from '../components/OcrSidebar.vue'
+import { hitOcrParagraph, clipOcrBounds } from '../ocr/regions'
 import WatermarkPanel from '../components/WatermarkPanel.vue'
 
 const screenshot = ref<Screenshot>()
@@ -24,7 +25,15 @@ const saved = ref(false)
 const exportOpen = ref(false)
 const ocrOpen = ref(false)
 const ocrBusy = ref(false)
-const ocrData = ref('')
+const ocrError = ref('')
+const ocrCapabilities = ref<OcrCapabilities>()
+const ocrLanguage = ref('auto')
+const ocrParagraphs = ref<OcrParagraph[]>([])
+const selectedParagraphId = ref<string>()
+const ocrHasResult = ref(false)
+const ocrSidebar = ref<InstanceType<typeof OcrSidebar>>()
+const ocrSourceRevision = ref(-1)
+let ocrRequest = 0
 const watermarkOpen = ref(false)
 const watermark = ref<WatermarkConfig>(defaultWatermark())
 const tool = ref<Tool>('select')
@@ -44,12 +53,14 @@ const surfaceStyle = computed(() => ({
 }))
 const history = new DocumentHistory({ layers: [], watermark: watermark.value })
 const historyTick = ref(0)
+const ocrStale = computed(() => ocrHasResult.value && ocrSourceRevision.value !== historyTick.value)
 const canUndo = computed(() => { void historyTick.value; return history.canUndo })
 const canRedo = computed(() => { void historyTick.value; return history.canRedo })
 const defaults = ref<TextStyle>({ font: 'Microsoft YaHei UI', size: 28, color: '#ef5c68' })
 const numberStyle = ref<NumberStyle>('number')
 const markerHeadSize = ref(50)
 const arrowDefaults = ref({ lineWidth: 4, headSize: 22 })
+const shapeDefaults = ref({ lineWidth: 3, borderStyle: 'solid' as BorderStyle })
 const mosaicStrength = ref(18)
 const fonts = ref(['Microsoft YaHei UI', 'Microsoft YaHei', 'SimSun', 'SimHei', 'KaiTi', 'Arial', 'Segoe UI', 'Consolas'])
 const fontsLoading = ref(false)
@@ -57,7 +68,9 @@ const fontsError = ref('')
 const colors = ['#ef5c68', '#f3a24a', '#f4d44d', '#44b797', '#438fe8', '#8063d5', '#26232f', '#ffffff']
 const selectedText = computed(() => selected.value?.type === 'text' || selected.value?.type === 'marker' ? selected.value : undefined)
 const properties = computed(() => selectedText.value || defaults.value)
-const activeColor = computed(() => selected.value?.type === 'arrow' ? selected.value.color : properties.value.color)
+const selectedShape = computed(() => selected.value?.type === 'rectangle' || selected.value?.type === 'ellipse' ? selected.value : undefined)
+const activeShape = computed(() => selectedShape.value || shapeDefaults.value)
+const activeColor = computed(() => selectedShape.value?.color || (selected.value?.type === 'arrow' ? selected.value.color : properties.value.color))
 const activeArrow = computed(() => selected.value?.type === 'arrow' ? selected.value : arrowDefaults.value)
 const activeHeadSize = computed(() => selected.value?.type === 'marker' ? markerDiameter(selected.value) : markerHeadSize.value)
 const inspectorType = computed(() => selected.value?.type || (tool.value === 'select' ? 'text' : tool.value))
@@ -70,13 +83,15 @@ const tools = [
   { id: 'text' as const, icon: Type, label: '文字', key: 'T' },
   { id: 'marker' as const, icon: Grip, label: '序号', key: 'N' },
   { id: 'arrow' as const, icon: ArrowUpRight, label: '箭头', key: 'A' },
+  { id: 'rectangle' as const, icon: Square, label: '方框', key: 'R' },
+  { id: 'ellipse' as const, icon: Circle, label: '圆形', key: 'O' },
   { id: 'mosaic' as const, icon: Scan, label: '马赛克', key: 'M' },
 ]
-const toolHint = computed(() => ({ select: '选中后拖动 · Delete 删除', text: '点击图片添加文字', marker: '点击图片添加序号', mosaic: '拖动框选打码区域', arrow: '拖动绘制箭头 · 两端可调整' })[tool.value])
+const toolHint = computed(() => ({ select: '选中后拖动 · Delete 删除', text: '点击图片添加文字', marker: '点击图片添加序号', mosaic: '拖动框选打码区域', arrow: '拖动绘制箭头 · 两端可调整', rectangle: '拖动绘制方框 · Shift 正方形', ellipse: '拖动绘制椭圆 · Shift 正圆' })[tool.value])
 let resizeObserver: ResizeObserver | undefined
 let frame = 0
-let drag: { origin: Point; layer?: Layer; moved: boolean; pointerId: number; endpoint?: 'start' | 'end' } | undefined
-const draft = ref<MosaicLayer | ArrowLayer>()
+let drag: { origin: Point; layer?: Layer; moved: boolean; pointerId: number; endpoint?: 'start' | 'end'; shapeHandle?: ShapeHandle } | undefined
+const draft = ref<MosaicLayer | ArrowLayer | ShapeLayer>()
 let watermarkRequest = 0
 let zoomRequest = 0
 
@@ -87,6 +102,7 @@ function paint() {
   const ctx = canvas.value.getContext('2d')!
   renderScene(ctx, sourceImage.value, screenshot.value.width, screenshot.value.height, layers.value, watermark.value)
   if (draft.value?.type === 'arrow') paintArrow(ctx, draft.value)
+  else if (draft.value?.type === 'rectangle' || draft.value?.type === 'ellipse') paintShape(ctx, draft.value)
   else if (draft.value) {
     ctx.save(); ctx.fillStyle = '#8063d52b'; ctx.strokeStyle = '#8063d5'; ctx.lineWidth = 1.5 / scale.value
     ctx.fillRect(draft.value.x, draft.value.y, draft.value.width, draft.value.height)
@@ -123,16 +139,17 @@ async function zoom(value: number, anchor?: { x: number; y: number }) {
 function wheel(event: WheelEvent) {
   if (!event.ctrlKey) return
   event.preventDefault()
-  if (exportOpen.value || ocrOpen.value || watermarkOpen.value || !stage.value?.contains(event.target as Node)) return
+  if (exportOpen.value || watermarkOpen.value || !stage.value?.contains(event.target as Node)) return
   const pixels = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.value.clientHeight : 1)
   void zoom(scale.value * Math.exp(-Math.max(-120, Math.min(120, pixels)) * .002), { x: event.clientX, y: event.clientY })
 }
-function setTool(value: Tool) { tool.value = value; selectedId.value = undefined }
+function setTool(value: Tool) { cancelDrag(); tool.value = value; selectedId.value = undefined }
 async function toggleEditing() {
+  cancelDrag()
   editing.value = !editing.value
   selectedId.value = undefined
   tool.value = 'select'
-  try { await window.fanhua?.setEditing(editing.value) }
+  try { await window.fanhua?.setPreviewLayout({ editing: editing.value, ocr: ocrOpen.value }) }
   catch { message.error('窗口大小调整失败，仍可继续编辑') }
   await nextTick()
   if (fitMode.value) fit()
@@ -146,8 +163,21 @@ function patchStyle(key: keyof TextStyle, value: string | number) {
 }
 function patchText(value: string) { if (selectedText.value) { selectedText.value.text = value.slice(0, 4000); commit() } }
 function patchColor(value: string) {
-  if (selected.value?.type === 'arrow') { selected.value.color = value; defaults.value.color = value; commit() }
+  if (selectedShape.value) { selectedShape.value.color = value; defaults.value.color = value; commit() }
+  else if (selected.value?.type === 'arrow') { selected.value.color = value; defaults.value.color = value; commit() }
   else patchStyle('color', value)
+}
+function patchShape(key: 'lineWidth' | 'borderStyle', input: number | BorderStyle) {
+  if (key === 'lineWidth') {
+    const value = Math.max(1, Math.min(40, Number(input) || 1))
+    shapeDefaults.value.lineWidth = value
+    if (selectedShape.value) { selectedShape.value.lineWidth = value; commit() }
+  } else {
+    const value = input as BorderStyle
+    if (!['solid', 'dashed', 'dotted'].includes(value)) return
+    shapeDefaults.value.borderStyle = value
+    if (selectedShape.value) { selectedShape.value.borderStyle = value; commit() }
+  }
 }
 function patchArrow(key: 'lineWidth' | 'headSize', input: number) {
   const value = Math.max(key === 'lineWidth' ? 1 : 6, Math.min(key === 'lineWidth' ? 40 : 160, input || 1))
@@ -172,14 +202,15 @@ function patchStrength(value: number | [number, number]) {
   if (selected.value?.type === 'mosaic') { selected.value.strength = strength; commit() }
 }
 function deleteSelected() {
+  cancelDrag()
   if (!selected.value) return
   layers.value = layers.value.filter(layer => layer.id !== selectedId.value)
   selectedId.value = undefined
   commit()
 }
 function restore(document: EditorDocument) { watermarkRequest++; layers.value = document.layers; watermark.value = document.watermark; historyTick.value++; selectedId.value = undefined; saved.value = false }
-function undo() { if (history.canUndo) restore(history.undo()) }
-function redo() { if (history.canRedo) restore(history.redo()) }
+function undo() { cancelDrag(); if (history.canUndo) restore(history.undo()) }
+function redo() { cancelDrag(); if (history.canRedo) restore(history.redo()) }
 async function refreshFonts(refresh = false) {
   if (fontsLoading.value) return
   if (!window.fanhua) { if (refresh) message.info('桌面版可读取系统中安装的全部字体'); return }
@@ -200,13 +231,26 @@ function pointerPosition(event: PointerEvent) {
   return imagePoint(event.clientX, event.clientY, canvas.value!.getBoundingClientRect(), screenshot.value!.width, screenshot.value!.height)
 }
 function pointerDown(event: PointerEvent) {
-  if (!editing.value || !canvas.value || !screenshot.value || event.button !== 0) return
+  if (!canvas.value || !screenshot.value || event.button !== 0) return
+  const point = pointerPosition(event)
+  const measure = textMeasure(canvas.value.getContext('2d')!)
+  if (ocrOpen.value && (!editing.value || tool.value === 'select')) {
+    const annotation = editing.value && hitTest(layers.value, point, 5 / scale.value, measure)
+    const handle = editing.value && selectedShape.value && shapeHandleAt(selectedShape.value, point, 9 / scale.value)
+    const arrowEnd = editing.value && selected.value?.type === 'arrow' && arrowEndpointAt(selected.value, point, 9 / scale.value)
+    const paragraph = !annotation && !handle && !arrowEnd && hitOcrParagraph(ocrParagraphs.value, point)
+    if (paragraph) { event.preventDefault(); canvas.value.focus(); selectedId.value = undefined; selectParagraph(paragraph.id, false); return }
+  }
+  if (!editing.value) return
   event.preventDefault()
   canvas.value.focus()
   canvas.value.setPointerCapture(event.pointerId)
-  const point = pointerPosition(event)
-  const measure = textMeasure(canvas.value.getContext('2d')!)
   if (tool.value === 'select') {
+    const shapeHandle = selectedShape.value && shapeHandleAt(selectedShape.value, point, 9 / scale.value)
+    if (shapeHandle && selectedShape.value) {
+      drag = { origin: point, layer: { ...selectedShape.value }, moved: false, pointerId: event.pointerId, shapeHandle }
+      return
+    }
     const endpoint = selected.value?.type === 'arrow' ? arrowEndpointAt(selected.value, point, 9 / scale.value) : undefined
     if (endpoint && selected.value) {
       drag = { origin: point, layer: { ...selected.value }, moved: false, pointerId: event.pointerId, endpoint }
@@ -215,12 +259,13 @@ function pointerDown(event: PointerEvent) {
     const found = hitTest(layers.value, point, 5 / scale.value, measure)
     selectedId.value = found?.id
     drag = { origin: point, layer: found ? { ...found } : undefined, moved: false, pointerId: event.pointerId }
-  } else if (tool.value === 'mosaic' || tool.value === 'arrow') {
+  } else if (tool.value === 'mosaic' || tool.value === 'arrow' || tool.value === 'rectangle' || tool.value === 'ellipse') {
     selectedId.value = undefined
     drag = { origin: point, moved: false, pointerId: event.pointerId }
     draft.value = tool.value === 'arrow'
       ? { id: crypto.randomUUID(), type: 'arrow', x: point.x, y: point.y, endX: point.x, endY: point.y, color: defaults.value.color, ...arrowDefaults.value }
-      : { id: crypto.randomUUID(), type: 'mosaic', x: point.x, y: point.y, width: 0, height: 0, strength: mosaicStrength.value }
+      : tool.value === 'mosaic' ? { id: crypto.randomUUID(), type: 'mosaic', x: point.x, y: point.y, width: 0, height: 0, strength: mosaicStrength.value }
+      : { id: crypto.randomUUID(), type: tool.value, x: point.x, y: point.y, width: 0, height: 0, color: defaults.value.color, ...shapeDefaults.value }
   } else {
     const common = { id: crypto.randomUUID(), x: point.x, y: point.y, ...defaults.value }
     const layer: Layer = tool.value === 'text'
@@ -239,11 +284,14 @@ function pointerMove(event: PointerEvent) {
   const dy = point.y - drag.origin.y
   if (Math.hypot(dx, dy) > 2 / scale.value) drag.moved = true
   if (draft.value?.type === 'arrow') { draft.value.endX = point.x; draft.value.endY = point.y }
+  else if (draft.value?.type === 'rectangle' || draft.value?.type === 'ellipse') Object.assign(draft.value, shapeRect(drag.origin, point, screenshot.value.width, screenshot.value.height, event.shiftKey))
   else if (draft.value) Object.assign(draft.value, normalizeRect(drag.origin, point, screenshot.value.width, screenshot.value.height))
   else if (drag.layer && drag.moved) {
     const index = layers.value.findIndex(l => l.id === drag!.layer!.id)
     if (index < 0) return
-    if (drag.endpoint && drag.layer.type === 'arrow') {
+    if (drag.shapeHandle && (drag.layer.type === 'rectangle' || drag.layer.type === 'ellipse')) {
+      layers.value[index] = resizeShape(drag.layer, drag.shapeHandle, point, screenshot.value.width, screenshot.value.height, event.shiftKey)
+    } else if (drag.endpoint && drag.layer.type === 'arrow') {
       layers.value[index] = { ...drag.layer, ...(drag.endpoint === 'start' ? { x: point.x, y: point.y } : { endX: point.x, endY: point.y }) }
     } else layers.value[index] = moveLayer(drag.layer, dx, dy, screenshot.value.width, screenshot.value.height, textMeasure(canvas.value.getContext('2d')!))
   }
@@ -252,7 +300,7 @@ function pointerUp(event: PointerEvent) {
   if (drag && drag.pointerId !== event.pointerId) return
   if (draft.value && (draft.value.type === 'arrow' ? Math.hypot(draft.value.endX - draft.value.x, draft.value.endY - draft.value.y) >= 3 : draft.value.width >= 3 && draft.value.height >= 3)) {
     layers.value.push({ ...draft.value }); selectedId.value = draft.value.id; commit()
-    if (draft.value.type === 'arrow') tool.value = 'select'
+    if (draft.value.type !== 'mosaic') tool.value = 'select'
   } else if (drag?.layer && drag.moved) commit()
   draft.value = undefined
   drag = undefined
@@ -260,12 +308,16 @@ function pointerUp(event: PointerEvent) {
 }
 function pointerCancel(event: PointerEvent) {
   if (drag && drag.pointerId !== event.pointerId) return
+  cancelDrag()
+}
+function cancelDrag() {
+  const pointerId = drag?.pointerId
   if (drag?.layer) {
     const index = layers.value.findIndex(l => l.id === drag!.layer!.id)
     if (index >= 0) layers.value[index] = drag.layer
   }
   draft.value = undefined; drag = undefined
-  if (canvas.value?.hasPointerCapture(event.pointerId)) canvas.value.releasePointerCapture(event.pointerId)
+  if (pointerId !== undefined && canvas.value?.hasPointerCapture(pointerId)) canvas.value.releasePointerCapture(pointerId)
 }
 function doubleClick() { if (editing.value && selectedText.value) { textInput.value?.focus(); textInput.value?.select() } }
 async function exportCanvas(format: ImageFormat = 'png'): Promise<HTMLCanvasElement> {
@@ -324,12 +376,66 @@ async function copy() {
     message.success('已复制图片')
   } catch { message.error('复制失败，请使用保存图片') }
 }
+async function setOcrOpen(open: boolean) {
+  cancelDrag()
+  ocrOpen.value = open
+  try { await window.fanhua?.setPreviewLayout({ editing: editing.value, ocr: open }) }
+  catch { message.error('窗口大小调整失败，仍可继续使用识别面板') }
+  await nextTick()
+  if (fitMode.value) fit()
+}
+async function toggleOcr() {
+  if (loading.value || error.value) return
+  const open = !ocrOpen.value
+  await setOcrOpen(open)
+  if (open && !ocrHasResult.value && !ocrBusy.value) void recognizeText()
+}
 async function recognizeText() {
   if (ocrBusy.value || loading.value || error.value) return
-  ocrBusy.value = true
-  try { ocrData.value = await exportImage(); ocrOpen.value = true }
-  catch (cause) { message.error(cause instanceof Error ? cause.message : '图片读取失败') }
-  finally { ocrBusy.value = false }
+  if (!window.fanhua) { ocrError.value = '文字识别需在桌面版运行。'; return }
+  const request = ++ocrRequest
+  const revision = historyTick.value
+  ocrBusy.value = true; ocrError.value = ''
+  // Freeze the document at the start of this request, independently of zoom.
+  try {
+    const data = await exportImage()
+    const capabilities = await window.fanhua.getOcrCapabilities()
+    if (request !== ocrRequest) return
+    ocrCapabilities.value = capabilities
+    if (!capabilities.available) throw new Error(capabilities.reason || '当前系统无法使用文字识别')
+    const result = await window.fanhua.recognizeText(data, ocrLanguage.value)
+    if (request !== ocrRequest || !screenshot.value) return
+    ocrParagraphs.value = result.paragraphs.flatMap(paragraph => {
+      const bounds = clipOcrBounds(paragraph.bounds, screenshot.value!.width, screenshot.value!.height)
+      return bounds ? [{ ...paragraph, bounds }] : []
+    })
+    selectedParagraphId.value = undefined
+    ocrHasResult.value = true; ocrSourceRevision.value = revision
+  } catch (cause) {
+    if (request === ocrRequest) ocrError.value = cause instanceof Error ? cause.message : '文字识别失败，请重试'
+  } finally { if (request === ocrRequest) ocrBusy.value = false }
+}
+function selectParagraph(id: string, locateImage = true) {
+  const paragraph = ocrParagraphs.value.find(item => item.id === id)
+  if (!paragraph) return
+  selectedParagraphId.value = id
+  void nextTick(() => ocrSidebar.value?.revealSelection())
+  if (!locateImage || !canvas.value || !stage.value) return
+  const viewport = stage.value.getBoundingClientRect()
+  const image = canvas.value.getBoundingClientRect()
+  const bounds = paragraph.bounds
+  const left = image.left + bounds.x * scale.value, top = image.top + bounds.y * scale.value
+  const width = bounds.width * scale.value, height = bounds.height * scale.value
+  if (left < viewport.left + 12 || left + width > viewport.right - 12) stage.value.scrollLeft += left + width / 2 - viewport.left - viewport.width / 2
+  if (top < viewport.top + 12 || top + height > viewport.bottom - 12) stage.value.scrollTop += top + height / 2 - viewport.top - viewport.height / 2
+}
+function editParagraph(id: string, text: string) {
+  const paragraph = ocrParagraphs.value.find(item => item.id === id)
+  if (paragraph) paragraph.text = text.slice(0, 100000)
+}
+function paragraphStyle(paragraph: OcrParagraph) {
+  const bounds = paragraph.bounds
+  return { left: `${bounds.x * scale.value}px`, top: `${bounds.y * scale.value}px`, width: `${bounds.width * scale.value}px`, height: `${bounds.height * scale.value}px` }
 }
 async function togglePin() {
   if (!window.fanhua) { message.info('桌面版支持将图片固定在其他窗口上方'); return }
@@ -338,9 +444,10 @@ async function togglePin() {
 async function close() { if (window.fanhua) await window.fanhua.closeWindow(); else location.search = '' }
 async function minimize() { await window.fanhua?.minimizeWindow() }
 function keyDown(event: KeyboardEvent) {
-  if (exportOpen.value || ocrOpen.value || watermarkOpen.value) return
+  if (exportOpen.value || watermarkOpen.value) return
   const target = event.target as HTMLElement
-  if (target.closest('input,textarea,select,[contenteditable="true"],[role="slider"],.ant-select')) return
+  if (target.closest('input,textarea,select,[contenteditable="true"],[role="slider"],.ant-select,[data-testid="ocr-sidebar"]')) return
+  if (event.key === 'Escape' && drag) { event.preventDefault(); cancelDrag(); return }
   if (event.ctrlKey || event.metaKey) {
     if (event.key.toLowerCase() === 's') { event.preventDefault(); void save() }
     if (event.key.toLowerCase() === 'c') { event.preventDefault(); void copy() }
@@ -348,10 +455,10 @@ function keyDown(event: KeyboardEvent) {
     if (editing.value && event.key.toLowerCase() === 'y') { event.preventDefault(); redo() }
     return
   }
-  if (event.key === 'Escape') { if (selectedId.value) selectedId.value = undefined; else if (editing.value) void toggleEditing(); return }
+  if (event.key === 'Escape') { if (selectedId.value) selectedId.value = undefined; else if (ocrOpen.value) void setOcrOpen(false); else if (editing.value) void toggleEditing(); return }
   if (!editing.value) return
   if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); deleteSelected() }
-  const shortcutTools: Record<string, Tool> = { v: 'select', t: 'text', n: 'marker', a: 'arrow', m: 'mosaic' }
+  const shortcutTools: Record<string, Tool> = { v: 'select', t: 'text', n: 'marker', a: 'arrow', r: 'rectangle', o: 'ellipse', m: 'mosaic' }
   const chosen = shortcutTools[event.key.toLowerCase()]
   if (chosen) setTool(chosen)
   if (selected.value && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key) && screenshot.value && canvas.value) {
@@ -363,8 +470,8 @@ function keyDown(event: KeyboardEvent) {
     commit()
   }
 }
-function layerTitle(layer: Layer) { return layer.type === 'mosaic' ? '马赛克区域' : layer.type === 'arrow' ? '箭头标注' : layer.type === 'marker' ? `${sequenceLabel(layer.number, layer.style)} · ${layer.text || '步骤标识'}` : layer.text || '空白文字' }
-function selectLayer(layer: Layer) { selectedId.value = layer.id; tool.value = 'select' }
+function layerTitle(layer: Layer) { return layer.type === 'mosaic' ? '马赛克区域' : layer.type === 'arrow' ? '箭头标注' : layer.type === 'rectangle' ? '方框标注' : layer.type === 'ellipse' ? '圆形标注' : layer.type === 'marker' ? `${sequenceLabel(layer.number, layer.style)} · ${layer.text || '步骤标识'}` : layer.text || '空白文字' }
+function selectLayer(layer: Layer) { cancelDrag(); selectedId.value = layer.id; tool.value = 'select' }
 watch([layers, selectedId, editing, draft, scale, watermark], queuePaint, { deep: true })
 watch(() => watermark.value.imageDataUrl, async value => {
   if (!value) return
@@ -372,6 +479,7 @@ watch(() => watermark.value.imageDataUrl, async value => {
 })
 onMounted(async () => {
   window.addEventListener('keydown', keyDown)
+  window.addEventListener('blur', cancelDrag)
   window.addEventListener('wheel', wheel, { passive: false })
   try {
     screenshot.value = await (window.fanhua ? window.fanhua.getPreview() : getDemoScreenshot())
@@ -391,7 +499,7 @@ onMounted(async () => {
     void refreshFonts()
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '图片加载失败'; loading.value = false }
 })
-onBeforeUnmount(() => { window.removeEventListener('keydown', keyDown); window.removeEventListener('wheel', wheel); resizeObserver?.disconnect(); cancelAnimationFrame(frame) })
+onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyDown); window.removeEventListener('blur', cancelDrag); window.removeEventListener('wheel', wheel); resizeObserver?.disconnect(); cancelAnimationFrame(frame) })
 </script>
 
 <template>
@@ -405,7 +513,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', keyDown); window.r
       <div class="primary-actions">
         <AButton size="small" type="text" :class="{ 'is-pinned': pinned }" :title="pinned ? '取消置顶' : '固定到屏幕前方'" aria-label="固定窗口" :aria-pressed="pinned" @click="togglePin"><template #icon><PinOff v-if="pinned" :size="15" /><Pin v-else :size="15" /></template><span class="action-label">{{ pinned ? '已固定' : '固定' }}</span></AButton>
         <AButton size="small" type="text" :disabled="loading || !!error" aria-label="复制图片" title="复制图片 Ctrl+C" @click="copy"><template #icon><Copy :size="15" /></template><span class="action-label">复制</span></AButton>
-        <AButton size="small" type="text" :disabled="loading || !!error" :loading="ocrBusy" aria-label="识别文字" title="识别图片中的全部文字" @click="recognizeText"><template #icon><ScanText :size="15" /></template><span class="action-label">识别文字</span></AButton>
+        <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': ocrOpen }" :aria-pressed="ocrOpen" aria-label="识别文字" title="显示或收起文字识别面板" @click="toggleOcr"><template #icon><ScanText :size="15" /></template><span class="action-label">识别文字</span></AButton>
         <AButton size="small" type="text" disabled aria-label="翻译（开发中）" title="翻译功能开发中"><template #icon><Languages :size="15" /></template><span class="action-label">翻译</span></AButton>
         <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': watermark.enabled }" aria-label="水印设置" title="添加文字或图片水印" @click="watermarkOpen = true"><template #icon><Stamp :size="15" /></template><span class="action-label">水印</span></AButton>
         <AButton size="small" type="text" :disabled="loading || !!error" aria-label="进入编辑模式" :title="editing ? '完成编辑' : '编辑图片'" :class="{ 'edit-active': editing }" @click="toggleEditing"><template #icon><Check v-if="editing" :size="15" /><Pencil v-else :size="15" /></template><span class="action-label">{{ editing ? '完成' : '编辑' }}</span></AButton>
@@ -422,7 +530,10 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', keyDown); window.r
           <div v-if="loading || error" class="load-state"><ImageIcon :size="28" /><h2>{{ error || '正在读取图片…' }}</h2><p v-if="error">请重新截图或打开图片</p></div>
           <div v-else-if="screenshot" class="canvas-surface" :style="surfaceStyle">
           <div class="canvas-wrapper" :style="{ width: `${screenshot.width * scale}px`, height: `${screenshot.height * scale}px` }">
-            <canvas ref="canvas" :width="screenshot.width" :height="screenshot.height" :style="{ width: '100%', height: '100%', cursor: !editing ? 'default' : tool === 'select' ? 'default' : 'crosshair' }" tabindex="0" role="img" aria-label="截图编辑画布" data-testid="editor-canvas" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerCancel" @dblclick="doubleClick"></canvas>
+            <canvas ref="canvas" :width="screenshot.width" :height="screenshot.height" :style="{ width: '100%', height: '100%', cursor: !editing ? 'default' : tool === 'select' ? 'default' : 'crosshair' }" tabindex="0" role="img" aria-label="截图编辑画布" data-testid="editor-canvas" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerCancel" @lostpointercapture="pointerCancel" @dblclick="doubleClick"></canvas>
+            <div v-if="ocrOpen" class="ocr-regions" aria-hidden="true" :class="{ stale: ocrStale }" data-testid="ocr-regions">
+              <div v-for="(paragraph, index) in ocrParagraphs" :key="paragraph.id" class="ocr-region" :class="{ active: selectedParagraphId === paragraph.id }" :style="paragraphStyle(paragraph)" :data-paragraph-id="paragraph.id" data-testid="ocr-region"><span>{{ index + 1 }}</span></div>
+            </div>
           </div>
           </div>
         </div>
@@ -450,6 +561,14 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', keyDown); window.r
             <div class="color-palette"><button v-for="color in colors" :key="color" :style="{ background: color }" :class="{ chosen: activeColor === color }" :aria-label="`颜色 ${color}`" @click="patchColor(color)"><Check v-if="activeColor === color" :size="13" :color="color === '#ffffff' || color === '#f4d44d' ? '#38313c' : '#fff'" /></button></div>
             <p class="property-tip">拖动箭身可移动；拖动两端圆点可调整方向和长度。</p>
           </template>
+          <template v-else-if="inspectorType === 'rectangle' || inspectorType === 'ellipse'">
+            <div class="mosaic-symbol"><Square v-if="inspectorType === 'rectangle'" :size="21" /><Circle v-else :size="21" /><strong>{{ inspectorType === 'rectangle' ? '方框标注' : '圆形标注' }}</strong></div>
+            <label class="field-label">边框类型<ASelect size="small" aria-label="边框类型" :value="activeShape.borderStyle" :options="[{ value: 'solid', label: '实线' }, { value: 'dashed', label: '虚线' }, { value: 'dotted', label: '点线' }]" @change="value => patchShape('borderStyle', value as BorderStyle)" /></label>
+            <label class="field-label">边框粗细<AInputNumber size="small" aria-label="边框粗细" :value="activeShape.lineWidth" :min="1" :max="40" :precision="0" addon-after="px" @change="value => patchShape('lineWidth', Number(value))" /></label>
+            <label class="field-label">边框颜色<div class="custom-color"><input type="color" aria-label="边框颜色" :value="activeColor" @input="patchColor(($event.target as HTMLInputElement).value)" /><span>{{ activeColor.toUpperCase() }}</span></div></label>
+            <div class="color-palette"><button v-for="color in colors" :key="color" :style="{ background: color }" :class="{ chosen: activeColor === color }" :aria-label="`颜色 ${color}`" @click="patchColor(color)"><Check v-if="activeColor === color" :size="13" :color="color === '#ffffff' || color === '#f4d44d' ? '#38313c' : '#fff'" /></button></div>
+            <p class="property-tip">拖动边框移动，拖动控制点调整大小。按住 Shift 绘制正方形或正圆。</p>
+          </template>
           <template v-else>
             <div class="mosaic-symbol"><Scan :size="21" /><strong>像素马赛克</strong></div>
             <label class="field-label strength-label">打码强度<strong>{{ activeStrength }} px</strong></label><ASlider aria-label-for-handle="打码强度" :value="activeStrength" :min="4" :max="64" :step="2" @change="patchStrength" /><div class="range-labels"><span>细腻</span><span>强烈</span></div>
@@ -460,14 +579,14 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', keyDown); window.r
         <div class="layers-heading"><h2><Layers3 :size="15" />标注图层</h2><span>{{ layers.length }}</span></div>
         <div class="layers-list">
           <div v-if="!layers.length" class="layers-empty">暂无标注</div>
-          <button v-for="layer in layerList" :key="layer.id" class="layer-item" :class="{ selected: selectedId === layer.id }" :aria-label="`选择图层 ${layerTitle(layer)}`" @click="selectLayer(layer)"><span class="layer-type"><Type v-if="layer.type === 'text'" :size="15" /><Scan v-else-if="layer.type === 'mosaic'" :size="15" /><ArrowUpRight v-else-if="layer.type === 'arrow'" :size="15" /><span v-else>{{ sequenceLabel(layer.number, layer.style) }}</span></span><span class="layer-title">{{ layerTitle(layer) }}</span><span v-if="selectedId === layer.id" class="selected-indicator"></span></button>
+          <button v-for="layer in layerList" :key="layer.id" class="layer-item" :class="{ selected: selectedId === layer.id }" :aria-label="`选择图层 ${layerTitle(layer)}`" @click="selectLayer(layer)"><span class="layer-type"><Type v-if="layer.type === 'text'" :size="15" /><Scan v-else-if="layer.type === 'mosaic'" :size="15" /><ArrowUpRight v-else-if="layer.type === 'arrow'" :size="15" /><Square v-else-if="layer.type === 'rectangle'" :size="15" /><Circle v-else-if="layer.type === 'ellipse'" :size="15" /><span v-else>{{ sequenceLabel(layer.number, layer.style) }}</span></span><span class="layer-title">{{ layerTitle(layer) }}</span><span v-if="selectedId === layer.id" class="selected-indicator"></span></button>
         </div>
         <div class="inspector-footer"><kbd>Delete</kbd> 删除 <span>·</span> <kbd>Ctrl Z</kbd> 撤销</div>
       </aside>
+      <OcrSidebar v-if="ocrOpen" ref="ocrSidebar" :busy="ocrBusy" :error="ocrError" :paragraphs="ocrParagraphs" :selected-id="selectedParagraphId" :languages="ocrCapabilities?.languages || []" :language="ocrLanguage" :stale="ocrStale" :available="isDesktop && ocrCapabilities?.available !== false" :has-result="ocrHasResult" @close="setOcrOpen(false)" @recognize="recognizeText" @update:language="ocrLanguage = $event" @select="selectParagraph" @update:text="editParagraph" />
     </main>
     <footer class="statusbar"><div class="image-status"><span :class="['status-dot', { unsaved: !saved }]"></span><span>{{ saved ? '已保存到本地' : '未保存' }}</span><span v-if="pinned" class="pin-status">已置顶</span><span v-if="editing" class="status-hint">{{ toolHint }}</span></div><div class="zoom-controls" title="Ctrl + 鼠标滚轮缩放图片"><button class="icon-button" aria-label="缩小图片" @click="zoom(scale / 1.2)"><Minus :size="13" /></button><button class="zoom-value" aria-label="原始大小" title="原始大小 100%" @click="zoom(1)">{{ Math.round(scale * 100) }}%<ChevronDown :size="10" /></button><button class="icon-button" aria-label="放大图片" @click="zoom(scale * 1.2)"><Plus :size="13" /></button><i></i><button class="fit-button" :class="{ active: fitMode }" aria-label="适应窗口" title="适应窗口" @click="fit"><Maximize :size="13" /><span>适应</span></button></div></footer>
     <SaveExportDialog v-model:open="exportOpen" :width="screenshot?.width || 0" :height="screenshot?.height || 0" :busy="saving" @confirm="confirmSave" />
-    <OcrDialog v-model:open="ocrOpen" :image-data-url="ocrData" />
     <WatermarkPanel v-model:open="watermarkOpen" :model-value="watermark" :fonts="fonts" @update:model-value="setWatermark" />
   </div>
 </template>
@@ -550,6 +669,15 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', keyDown); window.r
   box-shadow: 0 0 0 1px #30204012, 0 2px 8px #30204012;
 }
 .canvas-wrapper canvas { display: block; touch-action: none; outline: none; }
+.ocr-regions { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.ocr-region { position: absolute; border: 1px dashed #967acb; background: #967acb14; }
+.ocr-region.active { border-color: #6e47b7; background: #9370ce30; box-shadow: 0 0 0 1px #8b65c754; }
+.ocr-region > span { position: absolute; top: 0; left: 0; padding: 0 3px; border-radius: 0 0 3px 0; color: #fff; background: #9577bf; font-size: 9px; line-height: 14px; }
+.ocr-region.active > span { background: #724fb0; }
+.ocr-regions.stale .ocr-region { border-color: #b49c72; background: #b49c720e; }
+.tool-list { min-width: 0; overflow-x: auto; }
+.tool-button { flex-shrink: 0; }
+.history-actions { flex-shrink: 0; }
 .load-state { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #7d738a; }
 .load-state h2 { font-size: 13px; font-weight: 500; margin: 12px 0 7px; }
 .load-state p { font-size: 11px; }

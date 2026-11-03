@@ -29,7 +29,8 @@ export interface AppState {
 export type ImageFormat = 'png' | 'jpeg' | 'webp' | 'bmp'
 export interface ImageSaveOptions { format: ImageFormat; quality?: number }
 export interface OcrLine { text: string; bounds: Rect }
-export interface OcrResult { text: string; lines: OcrLine[]; language: string; width: number; height: number }
+export interface OcrParagraph { id: string; text: string; bounds: Rect; lines: OcrLine[] }
+export interface OcrResult { text: string; lines: OcrLine[]; paragraphs: OcrParagraph[]; language: string; width: number; height: number }
 export interface OcrCapabilities { available: boolean; languages: { tag: string; name: string }[]; reason?: string }
 export type WatermarkPlacement = 'top-left' | 'top-center' | 'top-right' | 'center-left' | 'center' | 'center-right' | 'bottom-left' | 'bottom-center' | 'bottom-right' | 'tile'
 export interface WatermarkConfig {
@@ -67,6 +68,7 @@ export interface DesktopAPI {
   getPreview(): Promise<Screenshot>
   setPinned(pinned: boolean): Promise<boolean>
   setEditing(editing: boolean): Promise<void>
+  setPreviewLayout(layout: { editing: boolean; ocr: boolean }): Promise<void>
   saveImage(dataUrl: string, options?: ImageSaveOptions): Promise<{ canceled: boolean; filePath?: string }>
   copyImage(dataUrl: string): Promise<void>
   openImage(): Promise<void>
