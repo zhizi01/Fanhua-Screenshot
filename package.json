@@ -1,20 +1,22 @@
 {
   "name": "fanhua-screenshot",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
-  "os": ["win32"],
+  "os": [
+    "win32"
+  ],
   "description": "繁花有图 · 轻盈、自在的桌面截图与标注工具",
   "author": "繁花有图",
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "node scripts/windows-target.cjs && node scripts/dev.mjs",
-    "dev:web": "vite --host 127.0.0.1",
+    "dev": "node scripts/windows-target.cjs && npm run pdf:prepare && node scripts/dev.mjs",
+    "dev:web": "npm run pdf:prepare && vite --host 127.0.0.1",
     "typecheck": "vue-tsc --noEmit",
-    "build": "node scripts/windows-target.cjs && npm run typecheck && vite build",
+    "build": "node scripts/windows-target.cjs && npm run pdf:prepare && npm run typecheck && vite build",
     "start": "node scripts/windows-target.cjs && electron .",
     "test": "vitest run",
     "test:e2e": "playwright test",
@@ -28,6 +30,10 @@
     "test:windows-target": "node scripts/verify-windows-target.cjs",
     "test:windows-integration": "node scripts/verify-windows-integration.cjs",
     "test:context-menu": "node scripts/verify-context-menu.cjs",
+    "test:pdf": "node scripts/verify-pdf-ui.cjs",
+    "test:pdf:service": "node scripts/verify-pdf-service.cjs",
+    "test:pdf:renderer": "node scripts/verify-pdf-renderer.cjs",
+    "pdf:prepare": "node scripts/prepare-pdf-assets.mjs",
     "models:prepare": "node scripts/prepare-translation-models.mjs",
     "models:check": "node scripts/prepare-translation-models.mjs --check",
     "pack": "node scripts/windows-target.cjs && npm run models:check && npm run build && electron-builder --win --x64 --dir",
@@ -37,6 +43,8 @@
     "@huggingface/transformers": "3.8.1",
     "ant-design-vue": "^4.2.6",
     "lucide-vue-next": "^1.0.0",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.5.438",
     "sharp": "0.34.5",
     "tesseract.js": "^7.0.0",
     "vue": "^3.5.13"
@@ -64,6 +72,8 @@
       "dist/**/*",
       "electron/**/*",
       "package.json",
+      "!node_modules/pdfjs-dist/**/*",
+      "!node_modules/@napi-rs/canvas*/**/*",
       "!node_modules/onnxruntime-node/bin/napi-v3/darwin/**/*",
       "!node_modules/onnxruntime-node/bin/napi-v3/linux/**/*",
       "!node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**/*",
@@ -105,11 +115,22 @@
       {
         "from": "resources/translation",
         "to": "translation",
-        "filter": ["**/*", "!**/*.partial", "!**/*.tmp"]
+        "filter": [
+          "**/*",
+          "!**/*.partial",
+          "!**/*.tmp"
+        ]
       }
     ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "build/icon.ico",
       "artifactName": "Fanhua-Screenshot-${version}-Setup.${ext}"
     },

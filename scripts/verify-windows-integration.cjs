@@ -55,7 +55,7 @@ async function checkInstaller() {
   assert(!/\bHKCU\b|\bHKLM\b|\bHKCR\b|UserChoice|SetShellVarContext/i.test(source), 'Context verbs must follow the installer-selected scope and preserve default associations')
   assert(source.includes('"$INSTDIR\\${APP_EXECUTABLE_FILENAME}" --edit-image "%1"'), 'Both executable and image path must be quoted')
   assert(source.includes('"MultiSelectModel" "Single"'))
-  for (const extension of ['png', 'jpg', 'jpeg', 'webp', 'bmp']) {
+  for (const extension of ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'pdf']) {
     assert(source.includes(`!insertmacro FanhuaRegisterImageVerb "${extension}"`))
     assert(source.includes(`!insertmacro FanhuaUnregisterImageVerb "${extension}"`))
   }
@@ -71,11 +71,12 @@ async function checkInstaller() {
 }
 
 async function decoderTests(nativeImage) {
-  const { EXTENSIONS, MAX_BYTES, parseEditImageArgs, validateImagePath, readImageFile, decodeImageBytes } = require('../electron/image-open.cjs')
+  const { EXTENSIONS, OPEN_EXTENSIONS, MAX_BYTES, parseEditImageArgs, validateImagePath, readImageFile, readPreviewFile, decodeImageBytes } = require('../electron/image-open.cjs')
   const { encodeBmp } = require('../electron/features.cjs')
   await fs.mkdir(artifacts, { recursive: true })
   await checkInstaller()
   assert.deepEqual(EXTENSIONS, ['png', 'jpg', 'jpeg', 'webp', 'bmp'])
+  assert.deepEqual(OPEN_EXTENSIONS, [...EXTENSIONS, 'pdf'])
   const unusualPath = path.join(artifacts, '中文 图片 & 测试 (1).PNG')
   assert.equal(parseEditImageArgs(['electron.exe', '.', '--inspect=0', unusualPath]), null)
   assert.equal(parseEditImageArgs(['electron.exe', '.', '--edit-image', unusualPath, '--show-window']), unusualPath)
@@ -84,6 +85,9 @@ async function decoderTests(nativeImage) {
     assert.throws(() => parseEditImageArgs(args))
   }
   assert.equal(validateImagePath('\\\\server\\pictures\\中文 图片.png'), '\\\\server\\pictures\\中文 图片.png')
+  const pdfPath = path.join(artifacts, '中文文档.pdf')
+  assert.equal(parseEditImageArgs(['--edit-image', pdfPath]), pdfPath)
+  assert.throws(() => validateImagePath(pdfPath), /仅支持/, 'The image-only service must still reject PDFs')
   const width = 13, height = 7
   const pixels = bitmapFixture(width, height)
   const original = nativeImage.createFromBitmap(pixels, { width, height, scaleFactor: 1 })
@@ -136,6 +140,17 @@ async function decoderTests(nativeImage) {
     assert.deepEqual((await readImageFile(file, nativeImage)).getSize(), { width, height })
     fixtures.push(file)
   }
+  const { PDFDocument } = require('pdf-lib')
+  const document = await PDFDocument.create()
+  document.addPage([300, 200]).drawImage(await document.embedPng(png), { x: 0, y: 0, width: 300, height: 200 })
+  const documentPath = path.join(artifacts, '右键 图片 & 测试.pdf')
+  const pdfBytes = Buffer.from(await document.save())
+  await fs.writeFile(documentPath, pdfBytes)
+  const preview = await readPreviewFile(documentPath, nativeImage)
+  assert.equal(preview.pdf.name, path.basename(documentPath))
+  assert(Buffer.from(preview.pdf.bytes).equals(pdfBytes))
+  await assert.rejects(readImageFile(documentPath, nativeImage), /仅支持/)
+  fixtures.push(documentPath)
   await assert.rejects(readImageFile(path.join(artifacts, 'does-not-exist.png'), nativeImage), /不存在/)
   const directory = path.join(artifacts, 'not-a-file.png')
   await fs.mkdir(directory, { recursive: true })
@@ -145,7 +160,7 @@ async function decoderTests(nativeImage) {
   try { await handle.truncate(MAX_BYTES + 1) } finally { await handle.close() }
   try { await assert.rejects(readImageFile(oversize, nativeImage), /96 MB/) }
   finally { await fs.unlink(oversize) }
-  const report = { exactFlagOnly: true, fullyQualifiedPaths: true, chineseAndShellCharacters: true, formats: EXTENSIONS, bmpPaddedRowsAndTopDown: true, bmp32ReservedAlphaOpaque: true, invalidBmpRejected: true, oversizedHeaderAndFileRejected: true, sharpLoadedOnlyForWebp: true, explorerRegistryStaticChecks: true, installerExecuted: false, fixtures }
+  const report = { exactFlagOnly: true, fullyQualifiedPaths: true, chineseAndShellCharacters: true, formats: OPEN_EXTENSIONS, bmpPaddedRowsAndTopDown: true, bmp32ReservedAlphaOpaque: true, invalidBmpRejected: true, oversizedHeaderAndFileRejected: true, sharpLoadedOnlyForWebp: true, pdfInputBytesPreserved: true, explorerRegistryStaticChecks: true, installerExecuted: false, fixtures }
   await fs.writeFile(path.join(artifacts, 'windows-image-decoder-regression.json'), JSON.stringify(report, null, 2) + '\n')
   console.log(JSON.stringify(report, null, 2))
 }
@@ -161,7 +176,7 @@ async function integrationTests(executable, env) {
   const errors = []
   app.on('window', page => page.on('pageerror', error => errors.push(error.message)))
   const previews = () => app.windows().filter(page => page.url().includes('view=preview'))
-  const report = { mode, opened: [], noDashboard: false, previousPreviewPreserved: false, normalStartupStaysInTray: false, pageErrors: errors }
+  const report = { mode, opened: [], noDashboard: false, previousPreviewPreserved: false, pdfFirstLaunchEditing: false, pdfSecondInstanceEditing: false, normalStartupStaysInTray: false, pageErrors: errors }
   try {
     await expect.poll(() => previews().length, { timeout: 20000 }).toBe(1)
     const first = previews()[0]
@@ -180,23 +195,34 @@ async function integrationTests(executable, env) {
     const canvas = await first.getByTestId('editor-canvas').boundingBox()
     await first.mouse.click(canvas.x + canvas.width / 3, canvas.y + canvas.height / 3)
     await first.getByRole('textbox', { name: '标注文字内容' }).fill('保留第一张图片的编辑')
-    for (const extension of ['jpg', 'jpeg', 'webp', 'bmp']) {
+    for (const extension of ['jpg', 'jpeg', 'webp', 'bmp', 'pdf']) {
       const before = new Set(previews())
       await spawnAndWait(executablePath, [...baseArgs, profile, '--edit-image', fixture(extension)], env)
       await expect.poll(() => previews().length, { timeout: 15000 }).toBe(before.size + 1)
       const next = previews().find(page => !before.has(page))
       await expect(next.locator('.editor-toolbar')).toBeVisible()
       await expect(next.getByTestId('editor-canvas')).toBeVisible()
-      const context = await next.evaluate(() => window.fanhua.getPreview())
+      const context = await next.evaluate(async () => {
+        const context = await window.fanhua.getPreview()
+        return { ...context, pdf: context.pdf ? { name: context.pdf.name, bytesLength: context.pdf.bytes.byteLength } : undefined }
+      })
       assert.equal(context.initialEditing, true)
-      assert.equal(context.width, 13); assert.equal(context.height, 7)
+      if (extension === 'pdf') {
+        assert.equal(context.width, 0); assert.equal(context.height, 0); assert.equal(context.dataUrl, '')
+        assert.equal(context.pdf.name, path.basename(fixture('pdf')))
+        assert(context.pdf.bytesLength > 0)
+        await expect(next.getByTestId('pdf-page-bar')).toBeVisible()
+        await expect(next.getByTestId('pdf-page-count')).toHaveText('/ 1')
+        assert(await next.getByTestId('editor-canvas').evaluate(canvas => canvas.width > 0 && canvas.height > 0))
+        report.pdfSecondInstanceEditing = true
+      } else { assert.equal(context.width, 13); assert.equal(context.height, 7) }
       assert.notEqual(context.id, original.id)
       report.opened.push(extension)
     }
     assert.equal(app.windows().filter(page => page.url().includes('view=dashboard')).length, 0, 'Image startup must not open the settings window')
     report.noDashboard = true
     const launchState = await app.evaluate(({ app }) => app.__imageOpenRegression)
-    assert.equal(launchState.launches.length, 4, 'All subsequent image opens must forward to the original process')
+    assert.equal(launchState.launches.length, 5, 'All subsequent image/PDF opens must forward to the original process')
     assert.deepEqual(launchState.messages, [], 'Valid forwarded image paths must not produce native error dialogs')
     assert.deepEqual(await first.evaluate(() => window.fanhua.getPreview()), original)
     await expect(first.getByRole('textbox', { name: '标注文字内容' })).toHaveValue('保留第一张图片的编辑')
@@ -204,6 +230,28 @@ async function integrationTests(executable, env) {
     await first.screenshot({ path: path.join(artifacts, `windows-edit-entry-${mode}.png`) })
     assert.deepEqual(errors, [])
   } finally { await app.close().catch(() => {}) }
+
+  const pdfApp = await electron.launch({ executablePath, args: [...baseArgs, profile, '--edit-image', fixture('pdf')], cwd: project, env, timeout: 30000 })
+  pdfApp.on('window', page => page.on('pageerror', error => errors.push(error.message)))
+  try {
+    await expect.poll(() => pdfApp.windows().filter(page => page.url().includes('view=preview')).length, { timeout: 20000 }).toBe(1)
+    const page = pdfApp.windows().find(page => page.url().includes('view=preview'))
+    await expect(page.locator('.editor-toolbar')).toBeVisible()
+    await expect(page.getByTestId('editor-canvas')).toBeVisible()
+    await expect(page.getByTestId('pdf-page-bar')).toBeVisible()
+    await expect(page.getByTestId('pdf-page-count')).toHaveText('/ 1')
+    const context = await page.evaluate(async () => {
+      const context = await window.fanhua.getPreview()
+      return { initialEditing: context.initialEditing, name: context.pdf?.name, byteLength: context.pdf?.bytes.byteLength }
+    })
+    assert.equal(context.initialEditing, true)
+    assert.equal(context.name, path.basename(fixture('pdf')))
+    assert(context.byteLength > 0)
+    assert.equal(pdfApp.windows().filter(page => page.url().includes('view=dashboard')).length, 0)
+    await page.screenshot({ path: path.join(artifacts, `windows-pdf-entry-${mode}.png`) })
+    report.pdfFirstLaunchEditing = true
+    assert.deepEqual(errors, [])
+  } finally { await pdfApp.close().catch(() => {}) }
 
   const normal = await electron.launch({ executablePath, args: [...baseArgs, profile], cwd: project, env, timeout: 30000 })
   try {

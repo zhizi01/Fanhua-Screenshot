@@ -8,7 +8,8 @@ const { createFeatureHandlers } = require('./features.cjs')
 const { createTranslationService } = require('./translation.cjs')
 const { createImageClipboard } = require('./image-clipboard.cjs')
 const { createLocalSendService } = require('./localsend.cjs')
-const { EXTENSIONS, parseEditImageArgs, readImageFile } = require('./image-open.cjs')
+const { OPEN_EXTENSIONS, parseEditImageArgs, readPreviewFile } = require('./image-open.cjs')
+const { createPdfService } = require('./pdf.cjs')
 const { selectionToPixels, intersectRect } = require('./geometry.cjs')
 
 app.setName('繁花有图')
@@ -23,6 +24,7 @@ const overlayPool = new Map()
 const features = createFeatureHandlers({ app, dialog, nativeImage, clipboard, helper })
 const imageClipboard = createImageClipboard({ clipboard, ClipboardItem, nativeImage })
 const localSend = createLocalSendService({ app, dialog, nativeImage })
+const pdfService = createPdfService({ app, dialog })
 const translation = createTranslationService({
   modelRoot: app.isPackaged ? path.join(process.resourcesPath, 'translation') : path.join(__dirname, '..', 'resources', 'translation'),
   forkProcess: (file, options) => utilityProcess.fork(file, [], options),
@@ -31,6 +33,7 @@ let dashboard = null
 let tray = null
 let captureSession = null
 let quitting = false
+let shutdownReady = false
 let shortcutRegistered = false
 let poolRefreshTimer = null
 
@@ -80,7 +83,10 @@ function makeWindow(view, options = {}) {
     }
   })
   const webContentsId = win.webContents.id
-  win.webContents.on('render-process-gone', () => translation.cancelOwner(webContentsId))
+  win.webContents.on('render-process-gone', () => {
+    translation.cancelOwner(webContentsId)
+    void pdfService.cancelOwner(webContentsId).catch(console.error)
+  })
   if (view === 'capture') {
     watchCaptureWindow(win, () => captures.get(webContentsId), () => captureSession, (current, reason) => {
       finishSession(current)
@@ -89,6 +95,7 @@ function makeWindow(view, options = {}) {
   }
   win.on('closed', () => {
     translation.cancelOwner(webContentsId)
+    void pdfService.cancelOwner(webContentsId).catch(console.error)
     managedWindows.delete(webContentsId)
     previews.delete(webContentsId)
     const capture = captures.get(webContentsId)
@@ -344,20 +351,38 @@ async function openPreview(image, { editing = false } = {}) {
 
 async function openImage(parent) {
   const options = {
-    title: '打开图片 · 繁花有图', properties: ['openFile'],
-    filters: [{ name: '图片', extensions: EXTENSIONS }],
+    title: '打开图片或 PDF · 繁花有图', properties: ['openFile'],
+    filters: [{ name: '图片和 PDF', extensions: OPEN_EXTENSIONS }, { name: 'PDF 文档', extensions: ['pdf'] }],
   }
   const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
   if (result.canceled || !result.filePaths[0]) return
-  await openPreview(await readImageFile(result.filePaths[0], nativeImage))
+  await openPreviewDocument(await readPreviewFile(result.filePaths[0], nativeImage))
+}
+
+async function openPreviewDocument(document, { editing = false } = {}) {
+  if (!document.pdf) return openPreview(document.image, { editing })
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const width = Math.min(display.workArea.width, 1000), height = Math.min(display.workArea.height, 800)
+  const win = makeWindow('preview', {
+    width, height, minWidth: Math.min(760, display.workArea.width), minHeight: Math.min(500, display.workArea.height),
+    x: Math.round(display.workArea.x + (display.workArea.width - width) / 2),
+    y: Math.round(display.workArea.y + (display.workArea.height - height) / 2),
+  })
+  previews.set(win.webContents.id, {
+    id: randomUUID(), dataUrl: '', width: 0, height: 0, createdAt: new Date().toISOString(), initialEditing: editing, pdf: document.pdf,
+  })
+  try {
+    await loadView(win, 'preview')
+    if (!win.isDestroyed()) { win.show(); win.focus() }
+  } catch (error) { win.destroy(); throw error }
 }
 
 async function handleLaunch(argv, secondary = false) {
   const file = parseEditImageArgs(argv)
   if (file) {
-    const image = await readImageFile(file, nativeImage)
+    const document = await readPreviewFile(file, nativeImage)
     if (captureSession) finishSession(captureSession)
-    await openPreview(image, { editing: true })
+    await openPreviewDocument(document, { editing: true })
   } else if (secondary || argv.includes('--show-window')) await openDashboard()
 }
 
@@ -374,10 +399,11 @@ function trustedHandler(channel, views, callback) {
 function resizePreview(win, layout) {
   if (!layout || typeof layout.editing !== 'boolean' || typeof layout.ocr !== 'boolean') throw new Error('窗口布局无效')
   const { editing, ocr } = layout
+  const pdf = !!previews.get(win.webContents.id)?.pdf
   const bounds = win.getBounds()
   const work = screen.getDisplayMatching(bounds).workArea
-  const minWidth = Math.min(editing && ocr ? 1040 : editing ? 760 : ocr ? 720 : 360, work.width)
-  const minHeight = Math.min(editing && ocr ? 540 : editing || ocr ? 500 : 240, work.height)
+  const minWidth = Math.min(editing && ocr ? 1040 : editing || pdf ? 760 : ocr ? 720 : 360, work.width)
+  const minHeight = Math.min(editing && ocr ? 540 : editing || ocr || pdf ? 500 : 240, work.height)
   win.setMinimumSize(minWidth, minHeight)
   if (editing || ocr) {
     const width = Math.max(minWidth, Math.min(bounds.width, work.width))
@@ -440,6 +466,10 @@ function installIpc() {
   })
   trustedHandler('preview:layout', ['preview'], resizePreview)
   trustedHandler('image:save', ['preview'], (win, dataUrl, options) => features.saveImage(win, dataUrl, options))
+  trustedHandler('pdf:begin-save', ['preview'], (win, options) => pdfService.begin(win, options))
+  trustedHandler('pdf:append-page', ['preview'], (win, jobId, page) => pdfService.append(win, jobId, page))
+  trustedHandler('pdf:finish-save', ['preview'], (win, jobId) => pdfService.finish(win, jobId))
+  trustedHandler('pdf:cancel-save', ['preview'], (win, jobId) => pdfService.cancel(win, jobId))
   trustedHandler('image:copy', ['preview'], (_win, dataUrl, mode) => imageClipboard.copy(dataUrl, mode))
   trustedHandler('localsend:share', ['preview'], (win, dataUrl) => localSend.share(win, dataUrl))
   trustedHandler('image:open', normal, openImage)
@@ -487,7 +517,12 @@ else {
   }).catch(showError)
   app.on('window-all-closed', () => { /* Keep the tray and global shortcut alive. */ })
   app.on('activate', () => void openDashboard().catch(showError))
-  app.on('before-quit', () => {
+  app.on('before-quit', event => {
+    if (shutdownReady) return
+    // Wait for an in-flight PDF write to close and remove its temporary file
+    // before Electron exits. The second quit proceeds after cleanup.
+    event.preventDefault()
+    if (quitting) return
     quitting = true
     if (captureSession) finishSession(captureSession, false)
     helper.stop()
@@ -497,5 +532,6 @@ else {
     globalShortcut.unregisterAll()
     if (tray) tray.destroy()
     tray = null
+    void pdfService.dispose().catch(console.error).finally(() => { shutdownReady = true; app.quit() })
   })
 }

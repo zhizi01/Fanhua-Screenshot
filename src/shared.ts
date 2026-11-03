@@ -19,6 +19,7 @@ export interface Screenshot {
   height: number
   createdAt: string
   initialEditing?: boolean
+  pdf?: { name: string; bytes: Uint8Array }
 }
 export interface AppState {
   shortcut: string
@@ -29,6 +30,9 @@ export interface AppState {
 }
 export type ImageFormat = 'png' | 'jpeg' | 'webp' | 'bmp'
 export interface ImageSaveOptions { format: ImageFormat; quality?: number }
+export interface ExportOptions { format: ImageFormat | 'pdf'; quality?: number; scope?: 'current' | 'all' }
+export interface PdfSaveOptions { pageCount: number; name?: string }
+export interface PdfPageInput { dataUrl: string; widthPoints: number; heightPoints: number }
 export type ImageCopyMode = 'png' | 'deskflow'
 export interface ImageCopyResult { format: 'png' | 'jpeg'; quality?: number; bytes: number }
 export interface OcrLine { text: string; bounds: Rect }
@@ -86,6 +90,10 @@ export interface DesktopAPI {
   setEditing(editing: boolean): Promise<void>
   setPreviewLayout(layout: { editing: boolean; ocr: boolean }): Promise<void>
   saveImage(dataUrl: string, options?: ImageSaveOptions): Promise<{ canceled: boolean; filePath?: string }>
+  beginPdfSave(options: PdfSaveOptions): Promise<{ canceled: boolean; jobId?: string }>
+  appendPdfPage(jobId: string, page: PdfPageInput): Promise<void>
+  finishPdfSave(jobId: string): Promise<{ canceled: boolean; filePath?: string }>
+  cancelPdfSave(jobId: string): Promise<void>
   copyImage(dataUrl: string, mode?: ImageCopyMode): Promise<ImageCopyResult>
   shareViaLocalSend(dataUrl: string): Promise<{ canceled: boolean; fileName?: string }>
   openImage(): Promise<void>

@@ -20,6 +20,7 @@
   !insertmacro FanhuaRegisterImageVerb "jpeg"
   !insertmacro FanhuaRegisterImageVerb "webp"
   !insertmacro FanhuaRegisterImageVerb "bmp"
+  !insertmacro FanhuaRegisterImageVerb "pdf"
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 !macroend
 
@@ -29,5 +30,6 @@
   !insertmacro FanhuaUnregisterImageVerb "jpeg"
   !insertmacro FanhuaUnregisterImageVerb "webp"
   !insertmacro FanhuaUnregisterImageVerb "bmp"
+  !insertmacro FanhuaUnregisterImageVerb "pdf"
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 !macroend

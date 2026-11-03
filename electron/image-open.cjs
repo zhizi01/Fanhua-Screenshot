@@ -5,6 +5,7 @@ const path = require('node:path')
 const MAX_BYTES = 96 * 1024 * 1024
 const MAX_PIXELS = 100000000
 const EXTENSIONS = Object.freeze(['png', 'jpg', 'jpeg', 'webp', 'bmp'])
+const OPEN_EXTENSIONS = Object.freeze([...EXTENSIONS, 'pdf'])
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
 
 function validDimensions(width, height) {
@@ -13,12 +14,12 @@ function validDimensions(width, height) {
   return { width, height }
 }
 
-function validateImagePath(file) {
+function validateImagePath(file, allowPdf = false) {
   if (typeof file !== 'string' || !file || file.length > 32760 || file.includes('\0') || !path.isAbsolute(file)) throw new Error('请提供图片文件的完整绝对路径')
   // A drive-relative root such as "\\photo.png" still depends on the caller's
   // current drive. Explorer supplies a fully qualified drive or UNC path.
   if (process.platform === 'win32' && !/^(?:[a-z]:[\\/]|\\\\[^\\/?]+\\[^\\/]+\\)/i.test(file)) throw new Error('请提供图片文件的完整绝对路径')
-  if (!EXTENSIONS.includes(path.extname(file).slice(1).toLowerCase())) throw new Error('仅支持 PNG、JPEG、WebP 和未压缩 BMP 图片')
+  if (!(allowPdf ? OPEN_EXTENSIONS : EXTENSIONS).includes(path.extname(file).slice(1).toLowerCase())) throw new Error(allowPdf ? '仅支持 PNG、JPEG、WebP、未压缩 BMP 和 PDF 文档' : '仅支持 PNG、JPEG、WebP 和未压缩 BMP 图片')
   return path.normalize(file)
 }
 
@@ -26,27 +27,27 @@ function parseEditImageArgs(argv) {
   if (!Array.isArray(argv)) throw new Error('图片编辑启动参数无效')
   const flags = argv.reduce((found, argument, index) => argument === '--edit-image' ? [...found, index] : found, [])
   if (!flags.length) return null
-  if (flags.length !== 1) throw new Error('一次只能通过右键打开一张图片')
-  return validateImagePath(argv[flags[0] + 1])
+  if (flags.length !== 1) throw new Error('一次只能通过右键打开一个图片或 PDF 文件')
+  return validateImagePath(argv[flags[0] + 1], true)
 }
 
-async function readBoundedFile(file) {
+async function readBoundedFile(file, label = '图片') {
   let handle
   try {
     handle = await fs.open(file, 'r')
     const stat = await handle.stat()
-    if (!stat.isFile()) throw new Error('所选路径不是图片文件')
-    if (stat.size > MAX_BYTES) throw new Error('图片文件过大，请选择小于 96 MB 的图片')
+    if (!stat.isFile()) throw new Error(`所选路径不是${label}文件`)
+    if (stat.size > MAX_BYTES) throw new Error(`${label}文件过大，请选择不超过 96 MB 的文件`)
     const chunks = []; let bytes = 0
     for await (const chunk of handle.createReadStream({ start: 0, end: MAX_BYTES, autoClose: false })) {
       bytes += chunk.length
-      if (bytes > MAX_BYTES) throw new Error('图片文件过大，请选择小于 96 MB 的图片')
+      if (bytes > MAX_BYTES) throw new Error(`${label}文件过大，请选择不超过 96 MB 的文件`)
       chunks.push(chunk)
     }
     return Buffer.concat(chunks, bytes)
   } catch (error) {
-    if (error.code === 'ENOENT') throw new Error('图片文件不存在或已被移动')
-    if (error.code === 'EACCES' || error.code === 'EPERM') throw new Error('无法读取图片，请检查文件访问权限')
+    if (error.code === 'ENOENT') throw new Error(`${label}文件不存在或已被移动`)
+    if (error.code === 'EACCES' || error.code === 'EPERM') throw new Error(`无法读取${label}，请检查文件访问权限`)
     throw error
   } finally { await handle?.close().catch(() => {}) }
 }
@@ -132,4 +133,12 @@ async function readImageFile(file, nativeImage) {
   return decodeImageBytes(await readBoundedFile(normalized), nativeImage)
 }
 
-module.exports = { EXTENSIONS, MAX_BYTES, parseEditImageArgs, validateImagePath, readImageFile, decodeImageBytes, decodeBmp }
+async function readPreviewFile(file, nativeImage) {
+  const normalized = validateImagePath(file, true)
+  if (path.extname(normalized).toLowerCase() !== '.pdf') return { image: await readImageFile(normalized, nativeImage) }
+  const bytes = await readBoundedFile(normalized, 'PDF')
+  if (!/^%PDF-(?:1\.[0-7]|2\.0)(?:\r\n|\r|\n)/.test(bytes.subarray(0, 16).toString('latin1'))) throw new Error('文件内容不是有效的 PDF，请检查文件格式')
+  return { pdf: { name: path.basename(normalized), bytes: new Uint8Array(bytes) } }
+}
+
+module.exports = { EXTENSIONS, OPEN_EXTENSIONS, MAX_BYTES, parseEditImageArgs, validateImagePath, readImageFile, readPreviewFile, decodeImageBytes, decodeBmp }
