@@ -55,7 +55,7 @@ async function openImage() {
       location.search = '?view=preview'
     }
   } catch {
-    message.error('图片打开失败，请选择 PNG、JPEG 或 WebP 图片')
+    message.error('打开失败，请选择 PNG、JPEG、WebP、BMP 图片或 PDF 文件')
   }
 }
 
@@ -103,7 +103,7 @@ onBeforeUnmount(() => {
       <div class="app-title">
         <FlowerLogo :size="24" />
         <h1>繁花有图</h1>
-        <span class="version">{{ state?.version || '1.5.0' }}</span>
+        <span class="version">{{ state?.version || '1.6.0' }}</span>
       </div>
       <button class="icon-button danger no-drag" aria-label="隐藏到系统托盘" title="关闭设置，继续在后台运行" @click="hideWindow">
         <X :size="17" />
@@ -125,7 +125,7 @@ onBeforeUnmount(() => {
         <p v-if="connectionError" class="inline-warning">{{ connectionError }}</p>
         <div class="capture-actions">
           <AButton type="primary" :loading="captureBusy" @click="startCapture"><template #icon><ScanLine :size="17" /></template>开始截图</AButton>
-          <AButton @click="openImage"><template #icon><ImagePlus :size="17" /></template>{{ native ? '打开图片' : '打开演示图片' }}</AButton>
+          <AButton @click="openImage"><template #icon><ImagePlus :size="17" /></template>{{ native ? '打开图片 / PDF' : '打开演示图片' }}</AButton>
         </div>
       </section>
 
