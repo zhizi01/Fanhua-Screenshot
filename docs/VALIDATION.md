@@ -1,5 +1,27 @@
 # 验证记录
 
+## 1.6.0：PDF 分页编辑与图片／PDF 导出
+
+日期：2026-11-04。环境继续为 Windows 11 x64 / Electron 45.2.1。使用隔离用户数据目录和本地生成的测试 PDF；保留原有 `tests/` 文件删除，未恢复或提交这些删除，未运行安装程序或修改系统注册表。
+
+- `npm run dist` 通过：类型检查、Vite、PDF.js 6.5.438 的本地资源准备、14 个离线翻译模型校验、Windows x64 与 NSIS 打包均成功。PDF 解析代码按需加载，本地 PDF 资源 200 个文件、约 4 MB；无需 CDN。
+- `verify-pdf-service.cjs` 通过：实际 pdf-lib 生成两页 PDF 并检查页尺寸、顺序、像素与透明度；覆盖 96 MB 输入、200 页、1600 万像素、128 MB 限制、窗口归属、保存路径互斥、取消对话框不加载依赖、取消/关闭/退出清理，以及写入/rename 失败时旧文件保持。
+- 服务自审补充拒绝 APNG、重复 IHDR、截断 PNG 块、损坏 IDAT；PNG 在交给 pdf-lib 前由 Sharp 限像素解码与规范化。新增真实临时文件碰撞回归，验证 `wx` 创建失败不会删除原有同名文件。服务报告无临时文件遗留。
+- `verify-pdf-renderer.cjs` 使用真实 Electron `file://`：标准字体与 Symbol/PFB、非嵌入 GB1 中文/CMap、CMYK、Rotate/CropBox/UserUnit、大页自动限幅均通过。确认使用实际 worker、本地字体文件且没有远程请求；中文页面已人工检查。201 页、损坏、密码 PDF 提示、嵌入脚本不执行、替换渲染取消、取消后重试和销毁中断均通过。
+- `verify-pdf-assets.cjs` 验证最终 ASAR 中 200 项 PDF 资源及 manifest（201 文件）逐项 SHA-256 与构建输入一致；最终 EXE 实际从 ASAR 读取中文 `UniGB-UCS2-H`、`Adobe-GB1-UCS2` 和 `FoxitSymbol`，响应字节与原资源一致。中文“繁花有图 中文测试”及 ΣπΩ 字形和真实 worker 通过，截图人工检查正常，无远程请求或页面错误。
+- `verify-pdf-ui.cjs` **源码与最终打包程序均通过**：逐页文字、水印和撤销记录独立；持有旧 OCR 任务时连续切到第 2/3/2 页，旧任务结束后仅追加最新第 2 页识别，无旧结果串页。OCR 接收的原始页面像素不含文字批注和水印。
+- 界面实际保存全部三页 PDF，逐页重新打开并与导出前合成 PNG 比较像素；页面尺寸依次为 500×300、360×480、420×280 PDF 点，原顺序和旋转后的显示尺寸正确。另验证当前页 PNG、单页 PDF、普通图片转 PDF（96 DPI）及输入文件 SHA-256 未改变。没有页面错误或远程请求。
+- 导出取消实测：逐页添加期间锁定编辑和翻页，取消后恢复；已存在的目标文件内容完全保留，当前页仍标记未保存，没有 `.fanhua-*.pdf.tmp` 遗留。损坏 PDF 显示可恢复错误。
+- 最终 EXE 的 `verify-windows-integration.cjs` 通过：PNG 首启及 JPG/JPEG/WebP/BMP/PDF 五次真实 second-instance 转发，PDF 首次启动与二次启动均直接进入编辑；页导航与实际画布可用、先前编辑保留、不打开设置。普通启动只驻留托盘，三次正常退出成功，无页面错误。PDF 注册宏已随 NSIS 编译，未执行安装器实测资源管理器菜单。
+- 普通图片的源码 `verify-sharing-ui.cjs`、`verify-context-menu.cjs`、`verify-translation.cjs` 全部通过：PNG/DeskFlow 实际剪贴板、LocalSend 启动替身交接、共享与右键菜单、窄窗布局、OCR/双向翻译/译文覆盖与导出隔离、取消及子进程恢复均无回归。本轮没有实际向设备发送文件。
+- 源码 UTF-8 严格解码与 Git 空白检查通过；没有将测试生成的 PDF 或截图加入源码提交。
+
+证据：`artifacts/pdf-service/service-regression.json`、`pdf-renderer-regression.json`、`pdf-assets-packaged.json`、`pdf-regression-{source,packaged}.json`、`windows-integration-packaged.json` 及对应界面 PNG。导出的多页 PDF 和当前页图片保存在忽略的 `artifacts/`，仅用于回归验证。
+
+安装包：`release/1.6.0/Fanhua-Screenshot-1.6.0-Setup.exe`，340,996,843 字节。未配置代码签名。
+
+SHA-256：`e29ae9d26ca759ca1f2cbcdd58683cc8208d6f0d7fd1677807b339813ee2f101`。
+
 ## 1.5.0：原位译文、图片右键编辑、共享菜单与 Windows 构建
 
 日期：2026-11-03。环境：Windows 11 x64、Node.js 24.16.0、Electron 45.2.1。保留工作区原有 `tests/` 文件删除，没有恢复或提交这些删除；本轮使用 `scripts/verify-*.cjs` 独立脚本与隔离用户数据目录，未关闭用户的旧版程序。

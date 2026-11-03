@@ -2,7 +2,7 @@
 
 ## 桌面交互
 
-1.5.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，译文同步覆盖原图识别区域；保存格式和水印使用就地弹窗，复制和共享使用紧凑下拉菜单。图片支持 Windows 资源管理器入口和画布内部的右键菜单。
+1.6.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，译文同步覆盖原图识别区域；保存格式和水印使用就地弹窗，复制和共享使用紧凑下拉菜单。图片支持 Windows 资源管理器入口和画布内部的右键菜单。
 
 内部路由沿用 `dashboard`、`capture`、`preview` 三个值。其中 `dashboard` 对应设置窗口，不是页面导航式工作台。
 
@@ -12,6 +12,8 @@
 | --- | --- | --- |
 | Electron 主进程 | `electron/main.cjs` | 单实例、托盘、全局快捷键、遮罩池、截图会话、窗口生命周期和 IPC 身份校验。 |
 | 图片入口 | `electron/image-open.cjs`、`build/installer.nsh` | 显式启动参数、格式与尺寸校验、静态图片解码、Explorer 编辑菜单。 |
+| PDF 渲染 | `src/pdf/document.ts`、`scripts/prepare-pdf-assets.mjs` | 按需加载 PDF.js、本地 worker/字体/CMap、逐页渲染、限制大页与取消。 |
+| PDF 编辑与保存 | `src/pdf/page-state.ts`、`PdfPageBar.vue`、`electron/pdf.cjs` | 独立页面编辑及历史、页导航、逐页合成、受窗口身份约束的 PDF 保存会话。 |
 | 桌面功能 | `electron/features.cjs` | 字体缓存、格式校验与保存、文字剪贴板、图片水印导入及存档持久化。 |
 | 图片复制与共享 | `src/components/ShareActions.vue`、`electron/image-clipboard.cjs`、`electron/localsend.cjs` | PNG／DeskFlow JPEG 复制、格式校验、LocalSend 查找和合成图片交接。 |
 | 预加载桥 | `electron/preload.cjs` | 通过 `contextBridge` 暴露明确的 `window.fanhua` 方法。 |
@@ -34,13 +36,25 @@
 
 ## 图片右键入口
 
-NSIS `customInstall` 在 `Software\Classes\SystemFileAssociations\.<扩展名>\shell\FanhuaScreenshot.Edit` 注册 PNG、JPG、JPEG、WebP、BMP 五种扩展，命令为带引号的程序路径与 `--edit-image "%1"`。注册表根使用 SHCTX，跟随安装器的当前用户（HKCU）／所有用户（HKLM）范围，避免管理员提升后写入错误用户账户。不写默认打开关联，`MultiSelectModel=Single` 限制单文件入口；卸载只有在命令仍指向本安装目录时删除自己的键，并通知 Shell 刷新关联。Windows 11 传统菜单通常在“显示更多选项”中。
+NSIS `customInstall` 在 `Software\Classes\SystemFileAssociations\.<扩展名>\shell\FanhuaScreenshot.Edit` 注册 PNG、JPG、JPEG、WebP、BMP、PDF 六种扩展，命令为带引号的程序路径与 `--edit-image "%1"`。注册表根使用 SHCTX，跟随安装器的当前用户（HKCU）／所有用户（HKLM）范围，避免管理员提升后写入错误用户账户。不写默认打开关联，`MultiSelectModel=Single` 限制单文件入口；卸载只有在命令仍指向本安装目录时删除自己的键，并通知 Shell 刷新关联。Windows 11 传统菜单通常在“显示更多选项”中。
 
 首启与 `second-instance` 均交给 `handleLaunch`，仅显式 `--edit-image` 接受完整绝对路径。`requestSingleInstanceLock` 的 additionalData 携带原始参数，避免 Chromium 重排二次启动参数导致路径错位。读取限制为 96 MB、32768 单边和一亿像素，按实际文件头验证格式；PNG/JPEG 使用 Electron NativeImage，WebP 惰性加载 Sharp，BMP 支持 24/32 位 BI_RGB，校验像素偏移、步长和数据长度。普通“打开图片”和右键入口共用解码器。右键入口传递 `initialEditing` 并使用编辑窗口尺寸，不会先打开设置；读取与编辑不改写源文件。
 
 画布内部右键在原图坐标命中标注，菜单可编辑、复制 PNG、保存、撤销、重做及删除选中标注。空白处清除旧选择，菜单约束在窗口内；方向键导航、Esc 关闭并恢复焦点，右键本身不会创建标注。
 
-## 截图会话流程
+## PDF 流程
+
+主进程 `readPreviewFile` 对 PDF 执行本地路径、普通文件、96 MB 上限与文件头校验，将字节作为预览上下文提供给所属窗口。纯图片的 `readImageFile` 继续保留原契约。渲染进程仅在 `openPdf` 时动态加载 PDF.js 6.5.438，读取本地 worker、标准字体、中文 CMap 与图像解码资源；不建立 PDF 脚本沙箱，不执行文档脚本，也不打开内嵌 URL。
+
+PDF.js 6.5 的 BinaryDataFactory 在主线程通过受目录和文件名约束的 XHR 读取本地资源，兼容 `file://` / ASAR 与 Vite；`useWorkerFetch:false`、`disableWorkerRendering:true`，页面解析在 worker 内、Canvas 绘制在渲染进程。使用 PDF.js 自带的颜色转换回退，不依赖外部 ICC 服务。CSP 仅增加本地/blob worker 与 WASM 执行许可，不放开普通脚本 eval 或外部源。打包排除仅用于 Node 渲染的可选 Canvas 原生包和重复 PDF.js 分发目录。
+
+页面尺寸使用包含 Rotate、CropBox、UserUnit 的 viewport。默认渲染比例 2（144 DPI），按 1600 万像素与 8192 单边上限缩小；串行渲染，每次结束释放 Canvas 和页面算子，前端只保留当前页栅格，其他页只保留标注、水印和历史。切页在目标渲染成功后原子替换当前画面；失败保留旧编辑。OCR 请求使用页级 id 和递增代次；旧任务结束后只续跑最新待识别页，避免全局 OCR 忙锁造成新页误报或旧结果串页。
+
+PDF 输出使用四个仅允许预览窗口的 IPC：begin/append/finish/cancel。先由系统对话框选路径，再依次提交合成 PNG 与物理页面尺寸；输出当前页或全部页，不改变当前显示页。服务懒加载 pdf-lib 1.17.1，每窗口一任务、目标路径互斥、最多 200 页；检查 PNG 块结构、限制像素并通过 Sharp 规范化，拒绝 APNG/重复 IHDR/畸形数据，原始和规范化 PNG 合计分别不超过 128 MB。每页嵌入后释放未压缩 RGB/alpha，输出是没有旧隐藏原文的静态页面。
+
+finish 将 PDF 写入目标同目录的独占临时文件，sync 后原子 rename，不预先截断原文件。取消、窗口退出、保存失败清理本任务临时文件；创建临时文件失败不删除同名既有文件。rename 为提交点，进入后等待完成。应用退出等待全部 PDF 清理结算，避免遗留半成品。详见 [PDF 支持说明](PDF.md)。
+
+## 截图会话执行
 
 程序启动后按显示器预加载透明、无边框、置顶的遮罩窗口；空闲时保持隐藏。`overlayPool` 按显示器 ID 复用这些窗口，避免每次快捷键都重新加载渲染页面。预加载失败时，下一次截图可重新创建。
 
@@ -194,12 +208,13 @@ Vue 响应式对象不能直接传入 Electron 的隔离桥。截图确认前显
 
 ## 开发与验证
 
-Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。当前版本 1.5.0，仅发布 Windows x64 程序目录与 NSIS 安装包，尚未配置代码签名。`package.json` 限制 `os=win32`，开发、启动、构建与打包前检查 Windows x64；命令显式固定 Windows x64，`beforePack` 再校验实际目标以拒绝其他平台或架构。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
+Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。当前版本 1.6.0，仅发布 Windows x64 程序目录与 NSIS 安装包，尚未配置代码签名。`package.json` 限制 `os=win32`，开发、启动、构建与打包前检查 Windows x64；命令显式固定 Windows x64，`beforePack` 再校验实际目标以拒绝其他平台或架构。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
 
 - 工作区既有 `tests/` 删除保持不变，历史单元及端到端记录参见 `docs/VALIDATION.md`，本轮使用下列独立脚本。桌面测试使用隔离用户数据目录，避免与正在运行的旧版本共用单实例锁或水印存档。
 - `scripts/verify-windows-target.cjs`：检查 Windows x64 构建约束与其他平台、架构的拒绝路径。
 - `scripts/verify-windows-integration.cjs`：图片解码与输入限制、安装宏、首启及已有实例图片编辑；支持传入打包 EXE。
 - `scripts/verify-context-menu.cjs`：真实 Electron 画布右键编辑、标注选择与删除、历史、菜单定位与焦点；支持传入打包 EXE。
+- `scripts/verify-pdf-service.cjs`、`verify-pdf-renderer.cjs`、`verify-pdf-ui.cjs`：PDF 保存生命周期、离线渲染与边界、逐页编辑和导出回开像素；`verify-pdf-assets.cjs` 核验最终 ASAR 资源及真实中文 PDF 显示。
 - `scripts/verify-translation-service.cjs`、`verify-translation-inference.cjs`：翻译输入与生命周期回归，以及禁止网络调用后的真实模型推理、取消和异常恢复。
 - `scripts/verify-translation.cjs`：真实 Electron OCR 到翻译全流程；传入 EXE 路径可复验打包程序，包含翻译中截图、终止任务子进程后恢复、窗口归属及导出隔离。
 - `scripts/verify-image-clipboard.cjs`、`verify-localsend.cjs`、`verify-sharing-ui.cjs`：真实图片剪贴板字节／像素、LocalSend 交接与临时文件生命周期、分享菜单／压缩参数／窄窗布局与失败恢复。分享界面脚本支持传入打包 EXE 路径。
