@@ -1,6 +1,6 @@
 {
   "name": "fanhua-screenshot",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "private": true,
   "description": "繁花有图 · 轻盈、自在的桌面截图与标注工具",
   "author": "繁花有图",
@@ -18,10 +18,16 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:packaged": "node scripts/test-packaged.mjs",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder --win nsis"
+    "test:translation": "node scripts/verify-translation.cjs",
+    "test:translation:service": "node scripts/verify-translation-service.cjs",
+    "test:translation:offline": "node scripts/verify-translation-inference.cjs",
+    "models:prepare": "node scripts/prepare-translation-models.mjs",
+    "models:check": "node scripts/prepare-translation-models.mjs --check",
+    "pack": "npm run models:check && npm run build && electron-builder --dir",
+    "dist": "npm run models:check && npm run build && electron-builder --win nsis"
   },
   "dependencies": {
+    "@huggingface/transformers": "3.8.1",
     "ant-design-vue": "^4.2.6",
     "lucide-vue-next": "^1.0.0",
     "tesseract.js": "^7.0.0",
@@ -41,17 +47,34 @@
   "build": {
     "appId": "cn.fanhua.screenshot",
     "productName": "繁花有图",
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release/${version}"
     },
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/onnxruntime-node/bin/napi-v3/darwin/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v3/linux/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**/*",
+      "!node_modules/onnxruntime-web/**/*",
+      "!node_modules/@huggingface/transformers/dist/transformers.web*",
+      "!node_modules/@huggingface/transformers/dist/transformers.node.mjs*",
+      "!node_modules/@huggingface/transformers/dist/*.map"
     ],
     "asarUnpack": [
       "electron/native/**/*",
       "electron/ocr-worker.cjs",
+      "electron/translation-worker.cjs",
+      "electron/translation-text.cjs",
+      "node_modules/@huggingface/transformers/**/*",
+      "node_modules/onnxruntime-node/**/*",
+      "node_modules/onnxruntime-common/**/*",
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*",
+      "node_modules/detect-libc/**/*",
+      "node_modules/semver/**/*",
       "node_modules/tesseract.js/**/*",
       "node_modules/tesseract.js-core/**/*",
       "node_modules/bmp-js/**/*",
@@ -69,6 +92,11 @@
       {
         "from": "resources/ocr",
         "to": "ocr"
+      },
+      {
+        "from": "resources/translation",
+        "to": "translation",
+        "filter": ["**/*", "!**/*.partial", "!**/*.tmp"]
       }
     ],
     "win": {

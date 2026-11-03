@@ -1,5 +1,5 @@
 'use strict'
-const { app, BrowserWindow, Menu, Tray, ipcMain, globalShortcut, desktopCapturer, screen, nativeImage, dialog, clipboard, ClipboardItem, session } = require('electron')
+const { app, BrowserWindow, Menu, Tray, ipcMain, globalShortcut, desktopCapturer, screen, nativeImage, dialog, clipboard, ClipboardItem, session, utilityProcess } = require('electron')
 const { Blob } = require('node:buffer')
 const path = require('node:path')
 const fs = require('node:fs/promises')
@@ -7,6 +7,7 @@ const { randomUUID } = require('node:crypto')
 const { NativeHelper } = require('./native-helper.cjs')
 const { watchCaptureWindow } = require('./capture-lifecycle.cjs')
 const { createFeatureHandlers } = require('./features.cjs')
+const { createTranslationService } = require('./translation.cjs')
 const { selectionToPixels, intersectRect, decodePngDataUrl } = require('./geometry.cjs')
 
 app.setName('繁花有图')
@@ -19,6 +20,10 @@ const captures = new Map()
 const previews = new Map()
 const overlayPool = new Map()
 const features = createFeatureHandlers({ app, dialog, nativeImage, clipboard, helper })
+const translation = createTranslationService({
+  modelRoot: app.isPackaged ? path.join(process.resourcesPath, 'translation') : path.join(__dirname, '..', 'resources', 'translation'),
+  forkProcess: (file, options) => utilityProcess.fork(file, [], options),
+})
 let dashboard = null
 let tray = null
 let captureSession = null
@@ -72,6 +77,7 @@ function makeWindow(view, options = {}) {
     }
   })
   const webContentsId = win.webContents.id
+  win.webContents.on('render-process-gone', () => translation.cancelOwner(webContentsId))
   if (view === 'capture') {
     watchCaptureWindow(win, () => captures.get(webContentsId), () => captureSession, (current, reason) => {
       finishSession(current)
@@ -79,6 +85,7 @@ function makeWindow(view, options = {}) {
     })
   }
   win.on('closed', () => {
+    translation.cancelOwner(webContentsId)
     managedWindows.delete(webContentsId)
     previews.delete(webContentsId)
     const capture = captures.get(webContentsId)
@@ -433,6 +440,14 @@ function installIpc() {
   trustedHandler('app:fonts', normal, (_win, refresh) => features.getFonts(refresh))
   trustedHandler('ocr:capabilities', ['preview'], () => features.getOcrCapabilities())
   trustedHandler('ocr:recognize', ['preview'], (win, dataUrl, language) => features.recognizeText(win, dataUrl, language))
+  trustedHandler('translation:capabilities', ['preview'], () => translation.getCapabilities())
+  trustedHandler('translation:translate', ['preview'], (win, request) => translation.translate(request, {
+    ownerId: win.webContents.id,
+    onProgress: progress => {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('translation:progress', progress)
+    },
+  }))
+  trustedHandler('translation:cancel', ['preview'], (win, requestId) => translation.cancel(requestId, win.webContents.id))
   trustedHandler('text:copy', ['preview'], (_win, text) => features.copyText(text))
   trustedHandler('watermark:choose-image', ['preview'], win => features.chooseWatermarkImage(win))
   trustedHandler('watermark:list-presets', ['preview'], () => features.listWatermarkPresets())
@@ -466,6 +481,7 @@ else {
     helper.stop()
     clearTimeout(poolRefreshTimer)
     void features.dispose()
+    void translation.dispose()
     globalShortcut.unregisterAll()
     if (tray) tray.destroy()
     tray = null

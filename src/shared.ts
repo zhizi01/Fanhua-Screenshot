@@ -32,6 +32,19 @@ export interface OcrLine { text: string; bounds: Rect }
 export interface OcrParagraph { id: string; text: string; bounds: Rect; lines: OcrLine[] }
 export interface OcrResult { text: string; lines: OcrLine[]; paragraphs: OcrParagraph[]; language: string; width: number; height: number }
 export interface OcrCapabilities { available: boolean; languages: { tag: string; name: string }[]; reason?: string }
+export type TranslationDirection = 'en-zh' | 'zh-en'
+export interface TranslationParagraph { id: string; sourceText: string; text: string }
+export interface TranslationRequest { requestId: string; direction: TranslationDirection; paragraphs: { id: string; text: string }[] }
+export interface TranslationResult { requestId: string; direction: TranslationDirection; paragraphs: TranslationParagraph[] }
+export interface TranslationCapabilities { available: boolean; directions: TranslationDirection[]; reason?: string }
+export interface TranslationProgress {
+  requestId: string
+  direction: TranslationDirection
+  completed: number
+  total: number
+  paragraph?: TranslationParagraph
+  status: 'loading' | 'translating' | 'done'
+}
 export type WatermarkPlacement = 'top-left' | 'top-center' | 'top-right' | 'center-left' | 'center' | 'center-right' | 'bottom-left' | 'bottom-center' | 'bottom-right' | 'tile'
 export interface WatermarkConfig {
   enabled: boolean
@@ -75,6 +88,10 @@ export interface DesktopAPI {
   getFonts(refresh?: boolean): Promise<string[]>
   getOcrCapabilities(): Promise<OcrCapabilities>
   recognizeText(dataUrl: string, language?: string): Promise<OcrResult>
+  getTranslationCapabilities(): Promise<TranslationCapabilities>
+  translateParagraphs(request: TranslationRequest): Promise<TranslationResult>
+  cancelTranslation(requestId: string): Promise<boolean>
+  onTranslationProgress(callback: (progress: TranslationProgress) => void): () => void
   copyText(text: string): Promise<void>
   chooseWatermarkImage(): Promise<{ dataUrl: string; width: number; height: number } | null>
   listWatermarkPresets(): Promise<WatermarkPreset[]>

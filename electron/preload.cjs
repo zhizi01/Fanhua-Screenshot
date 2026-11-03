@@ -30,6 +30,14 @@ contextBridge.exposeInMainWorld('fanhua', Object.freeze({
   getFonts: refresh => ipcRenderer.invoke('app:fonts', refresh),
   getOcrCapabilities: () => ipcRenderer.invoke('ocr:capabilities'),
   recognizeText: (dataUrl, language) => ipcRenderer.invoke('ocr:recognize', dataUrl, language),
+  getTranslationCapabilities: () => ipcRenderer.invoke('translation:capabilities'),
+  translateParagraphs: request => ipcRenderer.invoke('translation:translate', request),
+  cancelTranslation: requestId => ipcRenderer.invoke('translation:cancel', requestId),
+  onTranslationProgress: callback => {
+    const listener = (_event, progress) => callback(progress)
+    ipcRenderer.on('translation:progress', listener)
+    return () => ipcRenderer.removeListener('translation:progress', listener)
+  },
   copyText: text => ipcRenderer.invoke('text:copy', text),
   chooseWatermarkImage: () => ipcRenderer.invoke('watermark:choose-image'),
   listWatermarkPresets: () => ipcRenderer.invoke('watermark:list-presets'),
