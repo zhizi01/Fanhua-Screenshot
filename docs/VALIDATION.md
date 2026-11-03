@@ -1,5 +1,31 @@
 # 验证记录
 
+## 1.4.0：LocalSend 共享与两种图片复制
+
+日期：2026-11-03。环境继续为 Windows 11 / Electron 45.2.1。本轮保留工作区既有测试文件删除，新增独立脚本验证；没有恢复或提交这些删除。
+
+- `test:clipboard`：真实系统剪贴板 PNG 像素无损；DeskFlow 的原始 JFIF／image/jpeg 字节与质量 60 JPEG 完全一致，通用图像像素等于该 JPEG 解码结果，尺寸不变。错误输入不覆盖剪贴板，再次普通复制清除旧 JPEG 表示。独立测试图 JPEG 60 为 9265 字节、JPEG 100 为 41225 字节，这不是 DeskFlow 网络负载大小。
+- `test:localsend`：隔离夹具验证 PNG 字节保留、中文／空格／特殊字符路径作为一个参数传递、已有实例退出、便携路径记忆、选择取消、启动失败删除当次文件、防止重复请求，以及仅清理过期的自有临时文件。
+- `test:sharing` 源码与最终 `release/1.4.0/win-unpacked/繁花有图.exe` 均通过。真实 PNG 复制保留透明及文字、箭头、水印；DeskFlow 输入与同一合成画布白底 JPEG 0.6 编码逐字节相同（16788 字节），没有二次有损编码。`Ctrl+C` 始终恢复普通 PNG 模式。
+- 分享界面回归验证 LocalSend 获得的 PNG 与当前编辑合成 PNG 完全相同，OCR 虚拟框不进入输出；验证取消、错误提示、失败后重试、忙状态防重复和非预览窗口 IPC 拒绝。此自动检查使用 LocalSend 启动替身，不向设备发送。
+- 360／420 宽度预览、菜单及指定 DeskFlow 悬停提示均可见；源码版与打包版截图已目检，无页面异常。
+- 最终 EXE 再次通过 OCR 原图隔离回归：两次识别输入仍与原图字节和像素一致；保存文字、水印、箭头保持，剪贴板图像与保存文件像素一致。
+- 类型检查、Vite 构建、模型完整性校验、NSIS 构建、UTF-8 严格解码和 Git 空白检查通过。
+
+### 本机真实 LocalSend
+
+新后端实际找到 `D:\AppFile\LocalSend\localsend_app.exe`，版本 1.17.0+58。使用自制 800 × 400 测试 PNG，首次启动和已有实例转交均成功；真实发送界面预选 1 张 16.6 KB 图片，视觉确认了文件名和缩略图。没有点击接收设备或执行传输，未关闭用户的 LocalSend。测试后将窗口最小化，保留预选文件供其读取。
+
+结果文件：`artifacts/image-clipboard-regression.json`、`localsend-verification.json`、`localsend-real-check/launch.json`、`sharing-regression-source.json`、`sharing-regression-packaged.json`、`ocr-source-regression-packaged.json`，界面截图亦位于 `artifacts/`。
+
+### 安装包与边界
+
+安装包：`release/1.4.0/Fanhua-Screenshot-1.4.0-Setup.exe`，336,577,370 字节，保留已有离线 OCR 与翻译模型。
+
+SHA-256：`a4532f2a7921ce34fa43fdae560fbc8fad32944d7bdf06309e83e0368f4aa4ef`。
+
+验证运行打包目录中的 EXE，未执行安装向导。LocalSend 的发现、设备选择、确认与传输由其自身处理，本轮只实测唤起和文件预选。DeskFlow 没有独立于系统的专属剪贴板；官方 Windows 实现读取未压缩位图，JPEG 质量 60 不保证网络数据量等于 JPEG 文件大小，也不保证绕过剪贴板大小限制，未做真实跨设备同步验证。调用依据分别见 [LocalSend 说明](LOCALSEND.md) 和 [DeskFlow 说明](DESKFLOW.md)。
+
 ## 1.3.0：中英离线翻译
 
 日期：2026-11-03。Windows 11、Node.js 24.16.0、Electron 45.2.1。本轮保留工作区既有测试文件删除，使用新增的独立脚本验证，不把下方 1.2.0 历史测试计入本轮结果。

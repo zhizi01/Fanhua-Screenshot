@@ -2,7 +2,7 @@
 
 ## 桌面交互
 
-1.3.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，保存格式和水印使用就地弹窗，不引入账户、项目列表或页面导航流程。
+1.4.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，保存格式和水印使用就地弹窗；复制模式采用紧凑下拉菜单，LocalSend 使用共享按钮，不引入账户、项目列表或页面导航流程。
 
 内部路由沿用 `dashboard`、`capture`、`preview` 三个值。其中 `dashboard` 对应设置窗口，不是页面导航式工作台。
 
@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | Electron 主进程 | `electron/main.cjs` | 单实例、托盘、全局快捷键、遮罩池、截图会话、窗口生命周期和 IPC 身份校验。 |
 | 桌面功能 | `electron/features.cjs` | 字体缓存、格式校验与保存、文字剪贴板、图片水印导入及存档持久化。 |
+| 图片复制与共享 | `src/components/ShareActions.vue`、`electron/image-clipboard.cjs`、`electron/localsend.cjs` | PNG／DeskFlow JPEG 复制、格式校验、LocalSend 查找和合成图片交接。 |
 | 预加载桥 | `electron/preload.cjs` | 通过 `contextBridge` 暴露明确的 `window.fanhua` 方法。 |
 | 共享类型 | `src/shared.ts` | 截图上下文、窗口矩形、图片信息和桌面 API 契约。 |
 | 设置视图 | `src/views/DashboardView.vue` | 截图入口、打开图片、启动设置、快捷键状态。 |
@@ -145,7 +146,17 @@ Windows 路径通过隐藏 PowerShell 进程调用 WinRT。超过系统 OCR 尺�
 
 渲染进程使用 Canvas 编码 PNG、JPEG、WebP。BMP 通过 PNG 中间数据传到主进程后编码为 24 位、按行补齐的位图；浏览器演示使用 `src/editor/export.ts` 编码。主进程校验 MIME、文件头、尺寸及数据长度；PNG 重新编码，JPEG 保留已选质量的编码结果。由于 Electron 原生图片解码能力不覆盖 WebP，WebP 使用专门的容器与尺寸检查。
 
-系统保存对话框按选定格式设置筛选器。若用户输入不匹配的扩展名，主进程拒绝并提示重新保存，不擅自改写已确认路径。取消对话框不标记为已保存。复制始终使用 PNG，和文件保存共用场景合成逻辑。剪贴板使用当前 Electron 的异步 `ClipboardItem`／`clipboard.write` 接口，文字复制同样等待写入完成；见 [Electron 剪贴板文档](https://www.electronjs.org/docs/latest/api/clipboard)。
+系统保存对话框按选定格式设置筛选器。若用户输入不匹配的扩展名，主进程拒绝并提示重新保存，不擅自改写已确认路径。取消对话框不标记为已保存。复制与共享和文件保存共用场景合成逻辑，包含标注和水印，不包含选择控件、OCR 虚拟框及译文。
+
+普通复制与 `Ctrl+C` 使用 PNG。DeskFlow 模式由渲染进程在原始尺寸白底合成画布上调用 `toDataURL('image/jpeg', 0.6)`，只进行一次有损编码；主进程检查 JPEG 段、尺寸和实际解码结果。异步 `ClipboardItem` 同时提供普通图像、原始 `JFIF` 和原始 `image/jpeg` 注册格式，保留原始 JPEG 字节及兼容图片表示，不在主进程重新编码成 JPEG。普通 PNG 复制会替换旧的 JPEG 表示；错误输入在写入前拒绝，不清空当前剪贴板。DeskFlow Windows 的位图转换意味着 JPEG 字节数不等于其网络传输大小，详见 [DeskFlow 说明](DESKFLOW.md)。
+
+## LocalSend 交接
+
+`localsend:share` 仅接受预览窗口提交的合成 PNG，不接受渲染进程提供磁盘路径或程序路径。服务从记住的位置、正在运行的进程、注册表和常见安装目录查找 LocalSend，失败后使用系统文件选择器选择主程序；检查绝对路径、文件名与 PE 文件头。选择结果可保存到应用用户数据目录的 `localsend.json`，无效旧配置不会阻止重新选择。
+
+图片写入系统临时目录下 `fanhua-localsend` 的唯一命名 PNG，随后以 `spawn(executable, [imagePath], { shell: false })` 调用 LocalSend。不拼接 shell 命令、不实现私有网络接口，也不替用户选择接收设备。已有实例由 LocalSend 自身接收路径并唤醒。成功反馈仅表示程序交接完成，不表示远端收到图片。
+
+共享准备全局互斥，防止多个窗口同时弹出程序选择器。选择器取消，或程序选择结束时来源窗口已经关闭，不继续启动；启动失败清理当次文件。成功交接文件保留供 LocalSend 延后读取，关闭本工具不立即删除；初始化与再次分享时仅删除专用目录内符合本工具命名规则、非链接且超过 7 天的文件。其他文件不被清理。实际调用依据见 [LocalSend 说明](LOCALSEND.md)。
 
 ## 水印与持久化
 
@@ -167,11 +178,11 @@ Windows 路径通过隐藏 PowerShell 进程调用 WinRT。超过系统 OCR 尺�
 
 Vue 响应式对象不能直接传入 Electron 的隔离桥。截图确认前显式复制 `x/y/width/height` 为普通对象，避免自动识别窗口产生的 Proxy 无法序列化。原生端到端测试覆盖单击窗口这条路径。
 
-打开和保存路径来自系统文件对话框；水印存档只能访问应用固定的用户数据文件。图片和文字复制由主进程写入剪贴板。窗口导航、新窗口创建和 WebView 挂接被拒绝。程序没有图片上传、远程 OCR 或翻译请求路径。
+打开和保存路径来自系统文件对话框；水印存档只能访问应用固定的用户数据文件。图片和文字复制由主进程写入剪贴板。窗口导航、新窗口创建和 WebView 挂接被拒绝。OCR 和翻译仍在本机运行；用户主动共享时由 LocalSend 承接后续设备选择和传输。
 
 ## 开发与验证
 
-Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。发布构建由 `electron-builder` 生成 Windows 程序目录与 NSIS 安装包，当前版本 1.3.0，尚未配置代码签名。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
+Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。发布构建由 `electron-builder` 生成 Windows 程序目录与 NSIS 安装包，当前版本 1.4.0，尚未配置代码签名。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
 
 - `tests/unit/`：坐标、窗口边界、图像校验与编码、序号和箭头、形状边框/控制点/导出、文档历史、马赛克采样、水印布局/缓存/存档、OCR 段落归并/坐标及异常恢复。
 - `tests/e2e/browser.spec.ts`：使用演示图片验证截图选择、属性编辑、无损删除、缩放、多格式导出、水印及 OCR 界面交互。
@@ -179,6 +190,7 @@ Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Elect
 - `scripts/test-packaged.mjs`：读取项目版本后，针对 `release/<版本>/win-unpacked` 中已生成的 EXE 运行原生测试，发现开发环境与打包资源之间的差异。测试使用独立用户数据目录，避免与正在运行的旧版本共用单实例锁或水印存档。具体当轮执行结果见 `docs/VALIDATION.md`。
 - `scripts/verify-translation-service.cjs`、`verify-translation-inference.cjs`：翻译输入与生命周期回归，以及禁止网络调用后的真实模型推理、取消和异常恢复。
 - `scripts/verify-translation.cjs`：真实 Electron OCR 到翻译全流程；传入 EXE 路径可复验打包程序，包含翻译中截图、终止任务子进程后恢复、窗口归属及导出隔离。
+- `scripts/verify-image-clipboard.cjs`、`verify-localsend.cjs`、`verify-sharing-ui.cjs`：真实图片剪贴板字节／像素、LocalSend 交接与临时文件生命周期、分享菜单／压缩参数／窄窗布局与失败恢复。分享界面脚本支持传入打包 EXE 路径。
 
 浏览器演示位于 `src/demo.ts`，不参与真实 Electron 屏幕捕获。测试产物、构建产物和依赖目录通过 `.gitignore` 排除；源码与文档统一 UTF-8，提交说明使用中文。
 
