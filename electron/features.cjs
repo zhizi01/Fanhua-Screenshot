@@ -211,7 +211,7 @@ function createFeatureHandlers({ app, dialog, nativeImage, clipboard, helper }) 
       checkedImage(nativeImage, buffer)
       return ocr.recognize(buffer, language)
     },
-    copyText(text) { requiredString(text, 2000000, '复制文字'); clipboard.writeText(text) },
+    copyText(text) { requiredString(text, 2000000, '复制文字'); return clipboard.writeText(text) },
     async chooseWatermarkImage(win) {
       const selected = await dialog.showOpenDialog(win, { title: '选择图片水印', properties: ['openFile'], filters: [{ name: 'PNG / JPEG 图片', extensions: ['png', 'jpg', 'jpeg'] }] })
       if (selected.canceled || !selected.filePaths[0]) return null

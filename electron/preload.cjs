@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('fanhua', Object.freeze({
   getPreview: () => ipcRenderer.invoke('preview:get'),
   setPinned: pinned => ipcRenderer.invoke('preview:pin', pinned),
   setEditing: editing => ipcRenderer.invoke('preview:editing', editing),
+  setPreviewLayout: layout => ipcRenderer.invoke('preview:layout', layout),
   saveImage: (dataUrl, options) => ipcRenderer.invoke('image:save', dataUrl, options),
   copyImage: dataUrl => ipcRenderer.invoke('image:copy', dataUrl),
   openImage: () => ipcRenderer.invoke('image:open'),

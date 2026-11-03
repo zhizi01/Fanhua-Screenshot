@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
-const executablePath = path.resolve('release/win-unpacked/繁花有图.exe')
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+const executablePath = path.resolve(`release/${version}/win-unpacked/繁花有图.exe`)
 if (!existsSync(executablePath)) {
   console.error('请先执行 npm run pack 或 npm run dist。')
   process.exit(1)

@@ -1,6 +1,6 @@
 {
   "name": "fanhua-screenshot",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "繁花有图 · 轻盈、自在的桌面截图与标注工具",
   "author": "繁花有图",
@@ -42,7 +42,7 @@
     "appId": "cn.fanhua.screenshot",
     "productName": "繁花有图",
     "directories": {
-      "output": "release"
+      "output": "release/${version}"
     },
     "files": [
       "dist/**/*",
@@ -66,7 +66,10 @@
       "node_modules/webidl-conversions/**/*"
     ],
     "extraResources": [
-      { "from": "resources/ocr", "to": "ocr" }
+      {
+        "from": "resources/ocr",
+        "to": "ocr"
+      }
     ],
     "win": {
       "target": [

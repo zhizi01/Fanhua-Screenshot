@@ -1,5 +1,6 @@
 'use strict'
-const { app, BrowserWindow, Menu, Tray, ipcMain, globalShortcut, desktopCapturer, screen, nativeImage, dialog, clipboard, session } = require('electron')
+const { app, BrowserWindow, Menu, Tray, ipcMain, globalShortcut, desktopCapturer, screen, nativeImage, dialog, clipboard, ClipboardItem, session } = require('electron')
+const { Blob } = require('node:buffer')
 const path = require('node:path')
 const fs = require('node:fs/promises')
 const { randomUUID } = require('node:crypto')
@@ -354,6 +355,21 @@ function trustedHandler(channel, views, callback) {
   })
 }
 
+function resizePreview(win, layout) {
+  if (!layout || typeof layout.editing !== 'boolean' || typeof layout.ocr !== 'boolean') throw new Error('窗口布局无效')
+  const { editing, ocr } = layout
+  const bounds = win.getBounds()
+  const work = screen.getDisplayMatching(bounds).workArea
+  const minWidth = Math.min(editing && ocr ? 1040 : editing ? 760 : ocr ? 720 : 360, work.width)
+  const minHeight = Math.min(editing && ocr ? 540 : editing || ocr ? 500 : 240, work.height)
+  win.setMinimumSize(minWidth, minHeight)
+  if (editing || ocr) {
+    const width = Math.max(minWidth, Math.min(bounds.width, work.width))
+    const height = Math.max(minHeight, Math.min(bounds.height, work.height))
+    win.setBounds({ width, height, x: Math.max(work.x, Math.min(bounds.x, work.x + work.width - width)), y: Math.max(work.y, Math.min(bounds.y, work.y + work.height - height)) })
+  }
+}
+
 function installIpc() {
   const normal = ['dashboard', 'preview']
   trustedHandler('app:state', normal, appState)
@@ -404,23 +420,14 @@ function installIpc() {
     return actual
   })
   trustedHandler('preview:editing', ['preview'], (win, editing) => {
-    if (typeof editing !== 'boolean') throw new Error('编辑状态无效')
-    const bounds = win.getBounds()
-    const work = screen.getDisplayMatching(bounds).workArea
-    const minWidth = Math.min(editing ? 760 : 360, work.width)
-    const minHeight = Math.min(editing ? 500 : 240, work.height)
-    win.setMinimumSize(minWidth, minHeight)
-    if (editing) {
-      const width = Math.max(minWidth, Math.min(bounds.width, work.width))
-      const height = Math.max(minHeight, Math.min(bounds.height, work.height))
-      win.setBounds({ width, height, x: Math.max(work.x, Math.min(bounds.x, work.x + work.width - width)), y: Math.max(work.y, Math.min(bounds.y, work.y + work.height - height)) })
-    }
+    resizePreview(win, { editing, ocr: false })
   })
+  trustedHandler('preview:layout', ['preview'], resizePreview)
   trustedHandler('image:save', ['preview'], (win, dataUrl, options) => features.saveImage(win, dataUrl, options))
   trustedHandler('image:copy', ['preview'], (_win, dataUrl) => {
     const image = nativeImage.createFromBuffer(decodePngDataUrl(dataUrl))
     if (image.isEmpty()) throw new Error('图片解码失败')
-    clipboard.writeImage(image)
+    return clipboard.write([new ClipboardItem({ 'image/png': new Blob([image.toPNG()], { type: 'image/png' }) })])
   })
   trustedHandler('image:open', normal, openImage)
   trustedHandler('app:fonts', normal, (_win, refresh) => features.getFonts(refresh))
