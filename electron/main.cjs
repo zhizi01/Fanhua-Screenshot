@@ -5,6 +5,7 @@ const fs = require('node:fs/promises')
 const { randomUUID } = require('node:crypto')
 const { NativeHelper } = require('./native-helper.cjs')
 const { watchCaptureWindow } = require('./capture-lifecycle.cjs')
+const { createFeatureHandlers } = require('./features.cjs')
 const { selectionToPixels, intersectRect, decodePngDataUrl } = require('./geometry.cjs')
 
 app.setName('繁花有图')
@@ -15,12 +16,14 @@ const helper = new NativeHelper()
 const managedWindows = new Map()
 const captures = new Map()
 const previews = new Map()
+const overlayPool = new Map()
+const features = createFeatureHandlers({ app, dialog, nativeImage, clipboard, helper })
 let dashboard = null
 let tray = null
 let captureSession = null
 let quitting = false
 let shortcutRegistered = false
-let fontsPromise = null
+let poolRefreshTimer = null
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
 
@@ -80,7 +83,18 @@ function makeWindow(view, options = {}) {
     const capture = captures.get(webContentsId)
     captures.delete(webContentsId)
     if (capture && captureSession === capture.session && !capture.session.finishing) cancelCapture()
+    for (const [id, pooled] of overlayPool) if (pooled.win === win) overlayPool.delete(id)
   })
+  if (view === 'capture') {
+    // Discard a stalled renderer as well as a crashed one. Reusing it would
+    // otherwise make every later session time out waiting for capture:ready.
+    const discardOverlay = () => {
+      for (const [id, pooled] of overlayPool) if (pooled.win === win) overlayPool.delete(id)
+      if (!win.isDestroyed()) win.destroy()
+    }
+    win.webContents.on('render-process-gone', discardOverlay)
+    win.on('unresponsive', discardOverlay)
+  }
   return win
 }
 
@@ -148,6 +162,43 @@ function appState() {
   }
 }
 
+function ensureOverlay(display) {
+  const old = overlayPool.get(display.id)
+  if (old && !old.win.isDestroyed()) return old
+  const bounds = display.bounds
+  const win = makeWindow('capture', {
+    ...bounds, minWidth: 1, minHeight: 1, maxWidth: bounds.width, maxHeight: bounds.height,
+    useContentSize: true, resizable: false, movable: false, minimizable: false, maximizable: false,
+    alwaysOnTop: true, skipTaskbar: true, hasShadow: false, roundedCorners: false,
+    enableLargerThanScreen: true, backgroundColor: '#00000000', transparent: true,
+  })
+  win.setBounds(bounds)
+  win.setAlwaysOnTop(true, 'screen-saver')
+  const pooled = { win, loaded: null }
+  overlayPool.set(display.id, pooled)
+  pooled.loaded = loadView(win, 'capture').catch(error => {
+    if (overlayPool.get(display.id) === pooled) overlayPool.delete(display.id)
+    if (!win.isDestroyed()) win.destroy()
+    throw error
+  })
+  // Prewarming is optional; a failed preload is retried by the next capture.
+  pooled.loaded.catch(() => {})
+  return pooled
+}
+
+function warmOverlays() {
+  if (quitting) return
+  for (const display of screen.getAllDisplays()) ensureOverlay(display)
+}
+
+function displaysChanged() {
+  cancelCapture()
+  for (const pooled of overlayPool.values()) if (!pooled.win.isDestroyed()) pooled.win.destroy()
+  overlayPool.clear()
+  clearTimeout(poolRefreshTimer)
+  poolRefreshTimer = setTimeout(warmOverlays, 250)
+}
+
 function finishSession(current, restoreWindows = true) {
   current.finishing = true
   clearTimeout(current.timer)
@@ -155,7 +206,10 @@ function finishSession(current, restoreWindows = true) {
   for (const item of current.windows) {
     captures.delete(item.webContentsId)
     item.resolveReady()
-    if (!item.win.isDestroyed()) item.win.destroy()
+    if (!item.win.isDestroyed()) {
+      item.win.hide()
+      item.win.webContents.send('capture:context-changed', null)
+    }
   }
   current.windows.length = 0
   if (captureSession === current) captureSession = null
@@ -170,17 +224,18 @@ function cancelCapture() {
   if (current) finishSession(current)
 }
 
-async function startCapture() {
+async function startCapture(originWindow) {
   if (captureSession || quitting) return
   const current = {
     id: randomUUID(), windows: [], finishing: false,
-    hiddenWindows: BrowserWindow.getAllWindows().filter(win => win.isVisible()),
+    hiddenWindows: originWindow instanceof BrowserWindow && originWindow.isVisible() ? [originWindow] : [],
     focusedWindow: BrowserWindow.getFocusedWindow(),
     escapeRegistered: false, timer: null,
   }
   captureSession = current
   current.escapeRegistered = globalShortcut.register('Escape', cancelCapture)
-  // Avoid capturing our own dashboard or existing pinned previews.
+  // A hotkey keeps the current desktop intact. Only an explicitly clicked
+  // settings/preview window is hidden before taking the frozen background.
   for (const win of current.hiddenWindows) win.hide()
   current.timer = setTimeout(() => {
     if (captureSession !== current) return
@@ -189,7 +244,7 @@ async function startCapture() {
   }, 20000)
   try {
     // Windows needs a composition frame after hiding a window.
-    await delay(180)
+    if (current.hiddenWindows.length) await delay(65)
     if (captureSession !== current) return
     const displays = screen.getAllDisplays()
     const nativeSize = {
@@ -198,7 +253,9 @@ async function startCapture() {
     }
     const [sources, nativeWindows] = await Promise.all([
       desktopCapturer.getSources({ types: ['screen'], thumbnailSize: nativeSize, fetchWindowIcons: false }),
-      helper.request('windows', { excludeProcessId: process.pid }).then(data => ({ available: true, data }), () => ({ available: false, data: [] })),
+      // Pooled overlays are hidden here and filtered by IsWindowVisible.
+      // Visible pinned previews must remain eligible for window snapping.
+      helper.request('windows').then(data => ({ available: true, data }), () => ({ available: false, data: [] })),
     ])
     if (captureSession !== current) return
     for (const display of displays) {
@@ -221,27 +278,25 @@ async function startCapture() {
           id: item.id, title: item.title,
         }]
       })
-      const win = makeWindow('capture', {
-        ...bounds, minWidth: 1, minHeight: 1, maxWidth: bounds.width, maxHeight: bounds.height,
-        useContentSize: true, resizable: false, movable: false, minimizable: false, maximizable: false,
-        alwaysOnTop: true, skipTaskbar: true, hasShadow: false, roundedCorners: false,
-        enableLargerThanScreen: true, backgroundColor: '#14121a',
-      })
-      win.setBounds(bounds)
-      win.setAlwaysOnTop(true, 'screen-saver')
+      const pooled = ensureOverlay(display)
+      const win = pooled.win
       let resolveReady
       const ready = new Promise(resolve => { resolveReady = resolve })
       const context = {
+        sessionId: current.id,
+        cursor: { x: screen.getCursorScreenPoint().x - bounds.x, y: screen.getCursorScreenPoint().y - bounds.y },
         displayId: display.id, dataUrl: image.toDataURL(), width: bounds.width, height: bounds.height,
         pixelWidth: pixelSize.width, pixelHeight: pixelSize.height,
         windows: regions, windowDetectionAvailable: nativeWindows.available,
       }
-      const item = { win, webContentsId: win.webContents.id, display, image, context, session: current, resolveReady, ready }
+      const item = { win, webContentsId: win.webContents.id, display, image, context, session: current, resolveReady, ready, loaded: pooled.loaded }
       captures.set(win.webContents.id, item)
       current.windows.push(item)
     }
     await Promise.all(current.windows.map(async item => {
-      await loadView(item.win, 'capture')
+      await item.loaded
+      if (captureSession !== current || item.win.isDestroyed()) return
+      item.win.webContents.send('capture:context-changed', item.context)
       await item.ready
     }))
     if (captureSession !== current) return
@@ -316,17 +371,19 @@ function installIpc() {
   trustedHandler('capture:start', normal, startCapture)
   trustedHandler('capture:context', ['capture'], win => {
     const item = captures.get(win.webContents.id)
-    if (!item || captureSession !== item.session) throw new Error('截图会话已结束')
-    return item.context
+    return item && captureSession === item.session ? item.context : null
   })
-  trustedHandler('capture:ready', ['capture'], win => {
+  trustedHandler('capture:ready', ['capture'], (win, sessionId) => {
     const item = captures.get(win.webContents.id)
-    if (item) item.resolveReady()
+    if (item && item.context.sessionId === sessionId) item.resolveReady()
   })
-  trustedHandler('capture:cancel', ['capture'], cancelCapture)
-  trustedHandler('capture:complete', ['capture'], async (win, rect) => {
+  trustedHandler('capture:cancel', ['capture'], (win, sessionId) => {
     const item = captures.get(win.webContents.id)
-    if (!item || captureSession !== item.session) throw new Error('截图会话已结束')
+    if (item && item.context.sessionId === sessionId) cancelCapture()
+  })
+  trustedHandler('capture:complete', ['capture'], async (win, rect, sessionId) => {
+    const item = captures.get(win.webContents.id)
+    if (!item || captureSession !== item.session || item.context.sessionId !== sessionId) throw new Error('截图会话已结束')
     const pixels = selectionToPixels(rect, item.display.bounds, item.image.getSize())
     const image = item.image.crop(pixels)
     finishSession(item.session)
@@ -359,33 +416,21 @@ function installIpc() {
       win.setBounds({ width, height, x: Math.max(work.x, Math.min(bounds.x, work.x + work.width - width)), y: Math.max(work.y, Math.min(bounds.y, work.y + work.height - height)) })
     }
   })
-  trustedHandler('image:save', ['preview'], async (win, dataUrl) => {
-    const buffer = decodePngDataUrl(dataUrl)
-    const image = nativeImage.createFromBuffer(buffer)
-    if (image.isEmpty()) throw new Error('图片解码失败')
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const result = await dialog.showSaveDialog(win, {
-      title: '保存图片 · 繁花有图', defaultPath: path.join(app.getPath('pictures'), `繁花有图-${timestamp}.png`),
-      filters: [{ name: 'PNG 图片', extensions: ['png'] }],
-    })
-    if (result.canceled || !result.filePath) return { canceled: true }
-    // Re-encode to strip untrusted metadata before writing a renderer-supplied PNG.
-    await fs.writeFile(result.filePath, image.toPNG())
-    return { canceled: false, filePath: result.filePath }
-  })
+  trustedHandler('image:save', ['preview'], (win, dataUrl, options) => features.saveImage(win, dataUrl, options))
   trustedHandler('image:copy', ['preview'], (_win, dataUrl) => {
     const image = nativeImage.createFromBuffer(decodePngDataUrl(dataUrl))
     if (image.isEmpty()) throw new Error('图片解码失败')
     clipboard.writeImage(image)
   })
   trustedHandler('image:open', normal, openImage)
-  trustedHandler('app:fonts', normal, async () => {
-    if (!fontsPromise) fontsPromise = helper.request('fonts').catch(() => {
-      fontsPromise = null
-      return ['Microsoft YaHei UI', 'Microsoft YaHei', 'SimSun', 'SimHei', 'Segoe UI', 'Arial']
-    })
-    return fontsPromise
-  })
+  trustedHandler('app:fonts', normal, (_win, refresh) => features.getFonts(refresh))
+  trustedHandler('ocr:capabilities', ['preview'], () => features.getOcrCapabilities())
+  trustedHandler('ocr:recognize', ['preview'], (win, dataUrl, language) => features.recognizeText(win, dataUrl, language))
+  trustedHandler('text:copy', ['preview'], (_win, text) => features.copyText(text))
+  trustedHandler('watermark:choose-image', ['preview'], win => features.chooseWatermarkImage(win))
+  trustedHandler('watermark:list-presets', ['preview'], () => features.listWatermarkPresets())
+  trustedHandler('watermark:save-preset', ['preview'], (_win, preset) => features.saveWatermarkPreset(preset))
+  trustedHandler('watermark:delete-preset', ['preview'], (_win, id) => features.deleteWatermarkPreset(id))
 }
 
 if (!app.requestSingleInstanceLock()) app.quit()
@@ -400,9 +445,10 @@ else {
     tray.on('double-click', () => void openDashboard().catch(showError))
     registerShortcut()
     void helper.start().catch(() => { /* Manual area capture remains available. */ })
-    screen.on('display-removed', cancelCapture)
-    screen.on('display-added', cancelCapture)
-    screen.on('display-metrics-changed', cancelCapture)
+    screen.on('display-removed', displaysChanged)
+    screen.on('display-added', displaysChanged)
+    screen.on('display-metrics-changed', displaysChanged)
+    warmOverlays()
     if (process.argv.includes('--show-window')) await openDashboard()
   }).catch(showError)
   app.on('window-all-closed', () => { /* Keep the tray and global shortcut alive. */ })
@@ -411,6 +457,8 @@ else {
     quitting = true
     if (captureSession) finishSession(captureSession, false)
     helper.stop()
+    clearTimeout(poolRefreshTimer)
+    void features.dispose()
     globalShortcut.unregisterAll()
     if (tray) tray.destroy()
     tray = null

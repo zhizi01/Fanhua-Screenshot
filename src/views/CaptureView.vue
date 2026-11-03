@@ -18,6 +18,8 @@ const hoveredWindow = ref<WindowRegion | null>(null)
 const selected = ref<Rect | null>(null)
 const isDemo = !window.fanhua
 let unmounted = false
+let contextRevision = 0
+let unsubscribe: (() => void) | undefined
 
 const fullRect = computed<Rect | null>(() => context.value
   ? { x: 0, y: 0, width: context.value.width, height: context.value.height }
@@ -41,7 +43,7 @@ const shades = computed<Rect[]>(() => {
   if (!context.value) return []
   const { width, height } = context.value
   const r = currentRect.value
-  if (!r) return [{ x: 0, y: 0, width, height }]
+  if (!r) return []
   return [
     { x: 0, y: 0, width, height: r.y },
     { x: 0, y: r.y, width: r.x, height: r.height },
@@ -124,13 +126,14 @@ function onPointerCancel() {
 
 async function capture(rect: Rect) {
   if (busy.value || !context.value) return
+  const revision = contextRevision
   busy.value = true
   error.value = ''
   try {
     if (window.fanhua) {
       // A hovered window comes from a Vue reactive proxy. Electron's context
       // bridge can only clone plain data, so explicitly copy the numeric fields.
-      await window.fanhua.completeCapture({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+      await window.fanhua.completeCapture({ x: rect.x, y: rect.y, width: rect.width, height: rect.height }, context.value.sessionId)
     } else {
       const c = context.value
       const img = new Image()
@@ -147,6 +150,7 @@ async function capture(rect: Rect) {
       location.search = '?view=preview'
     }
   } catch (cause) {
+    if (revision !== contextRevision || unmounted) return
     error.value = cause instanceof Error ? cause.message : '截图未完成，请重试'
     busy.value = false
   }
@@ -154,11 +158,13 @@ async function capture(rect: Rect) {
 
 async function cancel() {
   if (busy.value) return
+  const revision = contextRevision
   clearPointer()
   try {
-    if (window.fanhua) await window.fanhua.cancelCapture()
+    if (window.fanhua) await window.fanhua.cancelCapture(context.value?.sessionId)
     else location.search = ''
   } catch {
+    if (revision !== contextRevision || unmounted) return
     error.value = '暂时无法关闭截图，请按 Esc 重试'
   }
 }
@@ -174,25 +180,46 @@ function keydown(event: KeyboardEvent) {
   }
 }
 
-onMounted(async () => {
-  document.addEventListener('keydown', keydown)
+async function receiveContext(result: CaptureContext | null) {
+  if (result?.sessionId && result.sessionId === context.value?.sessionId) return
+  const revision = ++contextRevision
+  clearPointer()
+  busy.value = false
+  error.value = ''
+  selected.value = null
+  hoveredWindow.value = null
+  pointer.value = null
+  dragged.value = false
+  context.value = null
+  if (!result || unmounted) return
   try {
-    const result = window.fanhua ? await window.fanhua.getCaptureContext() : await getDemoCaptureContext()
-    if (unmounted) return
     const image = new Image()
     image.src = result.dataUrl
     await image.decode()
-    if (unmounted) return
+    if (unmounted || revision !== contextRevision) return
     context.value = result
+    if (result.cursor && result.cursor.x >= 0 && result.cursor.y >= 0 && result.cursor.x < result.width && result.cursor.y < result.height) {
+      pointer.value = result.cursor
+      updateHover(result.cursor)
+    }
     await nextTick()
-    if (window.fanhua) await window.fanhua.captureReady()
+    if (unmounted || revision !== contextRevision) return
+    if (window.fanhua) await window.fanhua.captureReady(result.sessionId)
     stage.value?.focus()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '无法读取屏幕，请取消后重试'
   }
+}
+onMounted(async () => {
+  document.addEventListener('keydown', keydown)
+  if (window.fanhua) unsubscribe = window.fanhua.onCaptureContext(receiveContext)
+  try { await receiveContext(window.fanhua ? await window.fanhua.getCaptureContext() : getDemoCaptureContext()) }
+  catch (cause) { error.value = cause instanceof Error ? cause.message : '无法读取屏幕' }
 })
 onBeforeUnmount(() => {
   unmounted = true
+  contextRevision++
+  unsubscribe?.()
   document.removeEventListener('keydown', keydown)
   clearPointer()
 })
@@ -213,15 +240,14 @@ onBeforeUnmount(() => {
       <span class="dimensions">{{ size.width }} × {{ size.height }}</span>
     </div>
 
-    <div v-if="!context && !error" class="center-notice"><LoaderCircle :size="23" class="spin" />正在准备屏幕…</div>
-    <div v-if="busy" class="center-notice"><LoaderCircle :size="23" class="spin" />正在生成截图…</div>
+    <div v-if="busy" class="capture-progress"><LoaderCircle :size="14" class="spin" />正在截取</div>
 
     <div v-if="error" class="capture-error" role="alert" @pointerdown.stop @pointermove.stop @pointerup.stop>
       {{ error }}
       <button type="button" @click="cancel">取消截图</button>
     </div>
 
-    <footer class="capture-toolbar" @pointerdown.stop @pointermove.stop @pointerup.stop>
+    <footer v-if="context && !start" class="capture-toolbar" @pointerdown.stop @pointermove.stop @pointerup.stop>
       <div class="capture-brand"><Aperture :size="19" /><span>繁花有图</span><span v-if="isDemo" class="demo-badge">演示</span></div>
       <span class="toolbar-divider" />
       <div class="capture-hint"><MousePointer2 :size="15" /><span>{{ context?.windowDetectionAvailable ? '单击截取窗口 · 拖动自由框选' : '拖动自由框选 · 单击截取全屏' }}</span></div>
@@ -236,9 +262,9 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.capture-stage{position:relative;width:100%;height:100%;overflow:hidden;outline:0;cursor:crosshair;touch-action:none;user-select:none;background:#25232b;color:#fff;font-family:'Segoe UI','Microsoft YaHei UI',sans-serif}
+.capture-stage{position:relative;width:100%;height:100%;overflow:hidden;outline:0;cursor:crosshair;touch-action:none;user-select:none;background:transparent;color:#fff;font-family:'Segoe UI','Microsoft YaHei UI',sans-serif}
 .screen-image{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;object-fit:fill}
-.shade{position:absolute;background:rgba(14,12,24,.48);pointer-events:none}
+.shade{position:absolute;background:rgba(14,12,24,.15);pointer-events:none}
 .selection{position:absolute;border:2px solid #b59bff;box-shadow:inset 0 0 0 1px rgba(23,16,45,.22);pointer-events:none}
 .handle{position:absolute;width:6px;height:6px;border:1px solid #8c6cdd;background:#fff;border-radius:1px}
 .tl{top:-4px;left:-4px}.tc{top:-4px;left:calc(50% - 3px)}.tr{top:-4px;right:-4px}.ml{top:calc(50% - 3px);left:-4px}.mr{top:calc(50% - 3px);right:-4px}.bl{bottom:-4px;left:-4px}.bc{bottom:-4px;left:calc(50% - 3px)}.br{bottom:-4px;right:-4px}
@@ -246,7 +272,7 @@ onBeforeUnmount(() => {
 .window-title{overflow:hidden;text-overflow:ellipsis;max-width:260px}.dimensions{font-variant-numeric:tabular-nums;color:#e8dcff}.label-divider{width:1px;height:12px;background:rgba(255,255,255,.22)}
 .capture-toolbar{position:absolute;bottom:26px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;max-width:calc(100% - 32px);padding:11px 13px 11px 17px;background:rgba(30,27,39,.96);border:1px solid rgba(255,255,255,.15);border-radius:13px;box-shadow:0 12px 36px rgba(0,0,0,.2);cursor:default;white-space:nowrap}
 .capture-brand{display:flex;align-items:center;gap:8px;color:#f0eafa;font-size:12px;font-weight:600}.capture-brand>svg{color:#c2aaff}.capture-hint{display:flex;align-items:center;gap:7px;color:#d3cbdc;font-size:11px}.toolbar-divider{width:1px;height:19px;background:rgba(255,255,255,.15);margin:0 3px}.toolbar-action{display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;background:transparent;border:0;border-radius:6px;color:#e2d9ec;cursor:pointer}.toolbar-action:hover{background:#4d435f;color:#fff}.toolbar-action:disabled{opacity:.4;cursor:not-allowed}.toolbar-action.confirm{color:#c4a8ff}.toolbar-action.confirm:hover{background:#645083}.capture-toolbar kbd{min-width:24px;background:#3b3546;color:#c5bcd0;border-color:#574f63;font-size:10px;padding:2px 5px}.demo-badge{padding:2px 5px;border-radius:4px;border:1px solid #61546f;color:#cdb5ef;font-size:9px;font-weight:400}
-.center-notice{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:12px;padding:20px 24px;border-radius:12px;background:#211c2fea;font-size:14px;box-shadow:0 8px 40px #0003;pointer-events:none}.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.capture-progress{position:absolute;bottom:12px;right:16px;display:flex;align-items:center;gap:6px;padding:7px 10px;border-radius:6px;background:#211c2fea;font-size:11px;pointer-events:none}.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .capture-error{position:absolute;left:50%;bottom:100px;transform:translateX(-50%);max-width:calc(100% - 40px);padding:12px 16px;border:1px solid #a65e62;border-radius:9px;background:#39282cf5;color:#ffe4e8;font-size:12px;cursor:default}.capture-error button{margin-left:16px;border:0;border-radius:4px;background:#613d48;color:#fff;padding:4px 8px;cursor:pointer}.detection-note{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);font-size:10px;color:#fff;text-shadow:0 1px 3px #000;pointer-events:none}
 @media(max-width:650px){.capture-hint{font-size:10px}.capture-brand>span:not(.demo-badge){display:none}.capture-toolbar{gap:5px;padding:9px}.toolbar-divider{margin:0}.capture-toolbar kbd{display:none}}
 </style>
