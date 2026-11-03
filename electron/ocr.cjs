@@ -4,6 +4,7 @@ const { Worker } = require('node:worker_threads')
 const fs = require('node:fs/promises')
 const path = require('node:path')
 const os = require('node:os')
+const { normalizeText, clipLine, buildParagraphs, prepareOcrLayout } = require('./ocr-paragraphs.cjs')
 const unpacked = file => file.replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep)
 
 function runNativeOcr(mode, imagePath, language, signal) {
@@ -46,14 +47,10 @@ function runNativeOcr(mode, imagePath, language, signal) {
   })
 }
 
-function normalizeText(text) {
-  // Windows OCR inserts spaces between CJK characters; preserve English spaces.
-  return text.trim().replace(/([\p{Script=Han}])\s+(?=[\p{Script=Han}])/gu, '$1')
-}
 function deduplicateLines(lines) {
   const result = []
   for (const input of lines) {
-    if (typeof input.text !== 'string' || !input.text.trim() || !input.bounds || !['x', 'y', 'width', 'height'].every(key => Number.isFinite(input.bounds[key])) || input.bounds.width <= 0 || input.bounds.height <= 0) continue
+    if (!input || typeof input.text !== 'string' || !input.text.trim() || !input.bounds || !['x', 'y', 'width', 'height'].every(key => Number.isFinite(input.bounds[key])) || input.bounds.width <= 0 || input.bounds.height <= 0) continue
     const line = { text: normalizeText(input.text), bounds: { ...input.bounds } }
     const normalized = line.text.replace(/\s+/g, '')
     const duplicate = result.find(existing => {
@@ -156,8 +153,10 @@ function createOcrService({ app, nativeRunner = runNativeOcr, preferNative = tru
           if (!offlineAvailable) throw new Error('未找到所选语言的本地识别引擎')
           result = await runOfflineOcr(buffer, language, langPath, gzip, controller.signal)
         }
-        const lines = deduplicateLines(result.lines || [])
-        return { text: lines.map(line => line.text).join('\n'), lines, language: result.language, ...size }
+        const layout = prepareOcrLayout(result)
+        const lines = deduplicateLines(layout.lines).map(line => clipLine(line, size.width, size.height)).filter(Boolean)
+        const paragraphs = buildParagraphs(lines, size.width, size.height, layout.paragraphs)
+        return { text: paragraphs.map(paragraph => paragraph.text).join('\n\n'), lines, paragraphs, language: result.language, ...size }
       } finally {
         busy = false; controllers.delete(controller)
         if (directory) {

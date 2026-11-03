@@ -43,7 +43,7 @@ describe('本地 OCR 边界与生命周期', () => {
     const first = service.recognize(png)
     await expect(service.recognize(png)).rejects.toThrow('正在进行')
     release?.()
-    await first
+    expect(await first).toMatchObject({ text: '', lines: [], paragraphs: [], width: 1, height: 1 })
     await expect(fs.stat(input)).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(fs.stat(path.dirname(input))).rejects.toMatchObject({ code: 'ENOENT' })
     service.dispose()

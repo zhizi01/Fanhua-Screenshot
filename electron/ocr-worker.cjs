@@ -17,10 +17,13 @@ async function recognize() {
     })
     await worker.setParameters({ tessedit_pageseg_mode: '3', user_defined_dpi: '150' })
     const { data } = await worker.recognize(Buffer.from(workerData.buffer), {}, { text: true, blocks: true })
-    const lines = (data.blocks || []).flatMap(block => block.paragraphs.flatMap(paragraph => paragraph.lines.map(line => ({
-      text: line.text, bounds: { x: line.bbox.x0, y: line.bbox.y0, width: line.bbox.x1 - line.bbox.x0, height: line.bbox.y1 - line.bbox.y0 },
-    }))))
-    return { lines, language: workerData.language === 'en-US' ? 'en-US' : 'zh-Hans-CN' }
+    const paragraphs = (data.blocks || []).flatMap(block => (block.paragraphs || []).map(paragraph => ({
+      lines: (paragraph.lines || []).map(line => ({
+        text: line.text, bounds: { x: line.bbox.x0, y: line.bbox.y0, width: line.bbox.x1 - line.bbox.x0, height: line.bbox.y1 - line.bbox.y0 },
+        words: (line.words || []).map(word => ({ text: word.text, bounds: { x: word.bbox.x0, y: word.bbox.y0, width: word.bbox.x1 - word.bbox.x0, height: word.bbox.y1 - word.bbox.y0 } })),
+      })),
+    })))
+    return { paragraphs, lines: paragraphs.flatMap(paragraph => paragraph.lines), language: workerData.language === 'en-US' ? 'en-US' : 'zh-Hans-CN' }
   } finally { if (worker) await worker.terminate() }
 }
 recognize().then(result => parentPort.postMessage(result)).catch(() => parentPort.postMessage({ error: true }))
