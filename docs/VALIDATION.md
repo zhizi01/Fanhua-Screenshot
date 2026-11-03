@@ -1,5 +1,27 @@
 # 验证记录
 
+## 1.5.0：原位译文、图片右键编辑、共享菜单与 Windows 构建
+
+日期：2026-11-03。环境：Windows 11 x64、Node.js 24.16.0、Electron 45.2.1。保留工作区原有 `tests/` 文件删除，没有恢复或提交这些删除；本轮使用 `scripts/verify-*.cjs` 独立脚本与隔离用户数据目录，未关闭用户的旧版程序。
+
+- `npm run dist` 成功：类型检查、Vite、14 个离线模型文件 SHA-256 校验、Windows x64 目录打包及包含中文自定义宏的 NSIS 编译均通过。模型共 238,991,573 字节。
+- `npm run test:windows-target` 通过：Windows x64 被接受，非 Windows 主机与 macOS/Linux/ARM64/ia32 目标被拒绝；构建命令和实际 hook 配置一致。
+- `verify-windows-integration.cjs` 源码与最终打包版均通过：PNG 首启直接进入编辑，JPG/JPEG/WebP/BMP 四次真实 second-instance 转发正常；原图窗口的文字编辑保留，不打开设置窗口。无参数重启只驻留后台，页面错误为空。WebP 使用打包内 Sharp 成功解码。
+- 首轮实测发现 Chromium 会重排二次启动参数，现改用单实例锁 additionalData 携带原始参数，避免 `--edit-image` 与图片路径错位。图片文件名测试包含中文、空格和 `&`。
+- 解码回归通过：PNG/JPEG/WebP/BMP、24 位 BMP 补齐行和上下方向、32 位 BI_RGB 保留字节不透明、损坏头/压缩 BMP/超大尺寸/超大文件/缺失文件拒绝、Sharp 仅在 WebP 路径加载。
+- `verify-translation.cjs` 源码与最终打包版均通过：真实 OCR 和双向本地模型，图上遮罩译文与右侧段落一致；Ctrl+滚轮缩放及实际滚动后仍对齐，点击联动与悬停全文正常，指针穿透不妨碍编辑。关闭翻译、改原文、换方向和重新 OCR 均正确隐藏或使旧译文失效。
+- 译文与 OCR DOM 不进入导出：无编辑的 PNG 导出与原图解码像素完全一致。原有翻译取消、多窗口互斥、翻译期间截图、子进程退出恢复亦通过，无页面错误；已目视检查原位译文截图。
+- `verify-sharing-ui.cjs` 与 `verify-context-menu.cjs` 源码和最终打包版均通过，页面错误为空：共享必须先展开并选定唯一“通过LocalSend共享”项，展开或 Esc 不触发共享；菜单键盘操作、互斥及忙态正常。真实 PNG 剪贴板包含标注/水印且保留透明度，DeskFlow JPEG 字节与质量 0.6 编码完全一致，Ctrl+C 仍为 PNG；LocalSend 交接的 PNG 与导出一致。修复了 Ant Dropdown 初次挂载时 ArrowDown 未聚焦菜单项的问题。
+- 画布右键覆盖预览进入编辑、命中已有标注并修改、空白处清除旧选择防止误删、删除及撤销/重做、Esc 回到画布；六种绘制工具下右键均不创建标注。共享及右键菜单在 420/360 像素窄窗内无溢出，截图已目视检查。
+- 注册表宏静态检查与 NSIS 编译通过：用 SHCTX 跟随当前用户／所有用户安装范围，避免提升到另一管理员账户后误写 HKCU；不改变默认图片关联，卸载只删除仍指向本安装的菜单键。检查了 builder 模板在安装与卸载宏前设置 ShellVarContext。**本轮未执行安装程序或修改系统注册表**，菜单在真实资源管理器中的注册／卸载效果未作为实测通过项；Windows 11 通常在“显示更多选项”中显示传统菜单。
+- LocalSend 界面回归使用启动替身，不向设备实际传输；1.4.0 的真实 LocalSend 唤起记录仍保留。源码 UTF-8 严格解码及 Git 空白检查通过。
+
+证据：`artifacts/windows-integration-{source,packaged}.json`、`windows-image-decoder-regression.json`、`translation-regression-{source,packaged}.json`、`translation-overlay-{source,packaged}.png`、`sharing-regression-{source,packaged}.json`、`context-menu-regression-{source,packaged}.json` 及对应界面截图。
+
+安装包：`release/1.5.0/Fanhua-Screenshot-1.5.0-Setup.exe`，336,581,843 字节。未配置代码签名。
+
+SHA-256：`06808210f80fb4ebcf4cf4dc6b24ef5df1e1ea25cbdad72aa6f2ba62c1e5f495`。
+
 ## 1.4.0：LocalSend 共享与两种图片复制
 
 日期：2026-11-03。环境继续为 Windows 11 / Electron 45.2.1。本轮保留工作区既有测试文件删除，新增独立脚本验证；没有恢复或提交这些删除。

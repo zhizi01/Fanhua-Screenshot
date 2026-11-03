@@ -2,7 +2,7 @@
 
 ## 桌面交互
 
-1.4.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，保存格式和水印使用就地弹窗；复制模式采用紧凑下拉菜单，LocalSend 使用共享按钮，不引入账户、项目列表或页面导航流程。
+1.5.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，译文同步覆盖原图识别区域；保存格式和水印使用就地弹窗，复制和共享使用紧凑下拉菜单。图片支持 Windows 资源管理器入口和画布内部的右键菜单。
 
 内部路由沿用 `dashboard`、`capture`、`preview` 三个值。其中 `dashboard` 对应设置窗口，不是页面导航式工作台。
 
@@ -11,6 +11,7 @@
 | 部分 | 文件 | 职责 |
 | --- | --- | --- |
 | Electron 主进程 | `electron/main.cjs` | 单实例、托盘、全局快捷键、遮罩池、截图会话、窗口生命周期和 IPC 身份校验。 |
+| 图片入口 | `electron/image-open.cjs`、`build/installer.nsh` | 显式启动参数、格式与尺寸校验、静态图片解码、Explorer 编辑菜单。 |
 | 桌面功能 | `electron/features.cjs` | 字体缓存、格式校验与保存、文字剪贴板、图片水印导入及存档持久化。 |
 | 图片复制与共享 | `src/components/ShareActions.vue`、`electron/image-clipboard.cjs`、`electron/localsend.cjs` | PNG／DeskFlow JPEG 复制、格式校验、LocalSend 查找和合成图片交接。 |
 | 预加载桥 | `electron/preload.cjs` | 通过 `contextBridge` 暴露明确的 `window.fanhua` 方法。 |
@@ -19,6 +20,7 @@
 | 截图遮罩 | `src/views/CaptureView.vue` | 窗口命中、悬停高亮、框选、确认和取消。 |
 | 预览编辑 | `src/views/PreviewView.vue`、`src/editor/` | 原图坐标中的标注、箭头端点、矩形／椭圆控制点、缩放锚点、文档历史和导出。 |
 | OCR 段落栏 | `src/components/OcrSidebar.vue`、`src/ocr/regions.ts` | 段落选择、编辑复制、列表定位、识别坐标校验和图片位置联动。 |
+| 原位译文与右键 | `src/components/TranslationOverlay.vue`、`ImageContextMenu.vue` | 不进入导出的译文遮罩、自适应字号、画布上下文菜单与键盘操作。 |
 | 功能弹窗 | `src/components/SaveExportDialog.vue`、`WatermarkPanel.vue` | 格式和质量选择、水印设置及存档管理。 |
 | 水印渲染 | `src/watermark/` | 普通配置对象、图片解码缓存、旋转布局、平铺及浏览器存档回退。 |
 | Windows 服务 | `electron/native-helper.cjs`、`electron/native/windows.ps1` | 顶层窗口、系统与当前用户字体及本地化名称枚举。 |
@@ -30,7 +32,15 @@
 
 `setPreviewLayout({ editing, ocr })` 统一调整预览窗口最低尺寸。仅编辑为 760 × 500，仅识别为 720 × 500，同时开启为 1040 × 540；实际尺寸受当前显示器工作区限制。关闭侧栏后降低最小尺寸，不强制缩小用户已调整的窗口。图片、编辑属性和 OCR 段落栏位于同一工作区，段落列表独立滚动。
 
-## 截图会话
+## 图片右键入口
+
+NSIS `customInstall` 在 `Software\Classes\SystemFileAssociations\.<扩展名>\shell\FanhuaScreenshot.Edit` 注册 PNG、JPG、JPEG、WebP、BMP 五种扩展，命令为带引号的程序路径与 `--edit-image "%1"`。注册表根使用 SHCTX，跟随安装器的当前用户（HKCU）／所有用户（HKLM）范围，避免管理员提升后写入错误用户账户。不写默认打开关联，`MultiSelectModel=Single` 限制单文件入口；卸载只有在命令仍指向本安装目录时删除自己的键，并通知 Shell 刷新关联。Windows 11 传统菜单通常在“显示更多选项”中。
+
+首启与 `second-instance` 均交给 `handleLaunch`，仅显式 `--edit-image` 接受完整绝对路径。`requestSingleInstanceLock` 的 additionalData 携带原始参数，避免 Chromium 重排二次启动参数导致路径错位。读取限制为 96 MB、32768 单边和一亿像素，按实际文件头验证格式；PNG/JPEG 使用 Electron NativeImage，WebP 惰性加载 Sharp，BMP 支持 24/32 位 BI_RGB，校验像素偏移、步长和数据长度。普通“打开图片”和右键入口共用解码器。右键入口传递 `initialEditing` 并使用编辑窗口尺寸，不会先打开设置；读取与编辑不改写源文件。
+
+画布内部右键在原图坐标命中标注，菜单可编辑、复制 PNG、保存、撤销、重做及删除选中标注。空白处清除旧选择，菜单约束在窗口内；方向键导航、Esc 关闭并恢复焦点，右键本身不会创建标注。
+
+## 截图会话流程
 
 程序启动后按显示器预加载透明、无边框、置顶的遮罩窗口；空闲时保持隐藏。`overlayPool` 按显示器 ID 复用这些窗口，避免每次快捷键都重新加载渲染页面。预加载失败时，下一次截图可重新创建。
 
@@ -132,6 +142,8 @@ Windows 路径通过隐藏 PowerShell 进程调用 WinRT。超过系统 OCR 尺�
 
 `src/services/translation.ts` 管理 OCR 段落的翻译状态。用户明确选择 `en-zh` 或 `zh-en`，可翻译全部或单段；逐段进度带请求编号、方向、段落 ID、原文和译文。界面仅接收当前图片、当前请求、同一方向且原文仍一致的结果。编辑原文使对应旧译文失效；重新 OCR、换方向、关闭识别栏或卸载视图会取消在途翻译。已完成译文可复制，保存图片不经过此状态。
 
+`TranslationOverlay` 位于 OCR 区域 DOM 内，使用不透明度 97% 的白色遮罩与译文。隐藏测量元素按实际区域二分调整字号，屏幕字号最低 11px；放不下时截断，完整文字留在段落栏并作为画布悬停提示。ResizeObserver 与缩放变化触发重新排版，`pointer-events: none` 保留原有画布命中和编辑操作。关闭翻译恢复编号框，关闭 OCR 隐藏遮罩；段落结果的原文与方向不匹配时立即失效。该 DOM 不进入 Canvas 场景、文档历史及所有图片导出路径。
+
 主进程只向预览窗口暴露翻译 IPC，并绑定发起窗口的 `webContents.id`。其他窗口不能取消该任务；窗口关闭或渲染进程退出时由 `cancelOwner` 兜底清理。主进程全局仅允许一个任务，避免多窗口同时加载模型造成内存和 CPU 争用。请求校验方向、编号、去重段落 ID、200 段上限、单段 12000 字符及总计 60000 字符。
 
 `translation-worker.cjs` 通过 Electron `utilityProcess` 按需创建独立子进程，使用 Transformers.js 3.8.1 的 Node CJS 后端加载 OPUS-MT ONNX Q8，显式使用 CPU、2 个算子内线程和 1 个算子间线程。主进程和渲染进程不执行模型推理。一次仅保留一个方向的 pipeline，方向切换先释放旧模型；空闲 60 秒后终止子进程。取消、失败、超时或退出都会终止相关子进程，下一次等待旧进程退出后重新创建。原生推理与主程序进程隔离，取消不会在主进程中强杀 ONNX 工作线程。无进度等待限时 120 秒，整批任务最长 10 分钟。
@@ -178,20 +190,20 @@ Windows 路径通过隐藏 PowerShell 进程调用 WinRT。超过系统 OCR 尺�
 
 Vue 响应式对象不能直接传入 Electron 的隔离桥。截图确认前显式复制 `x/y/width/height` 为普通对象，避免自动识别窗口产生的 Proxy 无法序列化。原生端到端测试覆盖单击窗口这条路径。
 
-打开和保存路径来自系统文件对话框；水印存档只能访问应用固定的用户数据文件。图片和文字复制由主进程写入剪贴板。窗口导航、新窗口创建和 WebView 挂接被拒绝。OCR 和翻译仍在本机运行；用户主动共享时由 LocalSend 承接后续设备选择和传输。
+打开图片的路径来自系统文件对话框或显式 `--edit-image` 参数，保存路径来自系统保存对话框；水印存档只能访问应用固定的用户数据文件。图片和文字复制由主进程写入剪贴板。窗口导航、新窗口创建和 WebView 挂接被拒绝。OCR 和翻译仍在本机运行；用户主动共享时由 LocalSend 承接后续设备选择和传输。
 
 ## 开发与验证
 
-Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。发布构建由 `electron-builder` 生成 Windows 程序目录与 NSIS 安装包，当前版本 1.4.0，尚未配置代码签名。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
+Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。当前版本 1.5.0，仅发布 Windows x64 程序目录与 NSIS 安装包，尚未配置代码签名。`package.json` 限制 `os=win32`，开发、启动、构建与打包前检查 Windows x64；命令显式固定 Windows x64，`beforePack` 再校验实际目标以拒绝其他平台或架构。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
 
-- `tests/unit/`：坐标、窗口边界、图像校验与编码、序号和箭头、形状边框/控制点/导出、文档历史、马赛克采样、水印布局/缓存/存档、OCR 段落归并/坐标及异常恢复。
-- `tests/e2e/browser.spec.ts`：使用演示图片验证截图选择、属性编辑、无损删除、缩放、多格式导出、水印及 OCR 界面交互。
-- `tests/e2e/electron.spec.ts`：启动真实 Electron 和独立测试窗口，验证原生窗口识别、遮罩复用、系统字体、预览编辑与桌面功能。
-- `scripts/test-packaged.mjs`：读取项目版本后，针对 `release/<版本>/win-unpacked` 中已生成的 EXE 运行原生测试，发现开发环境与打包资源之间的差异。测试使用独立用户数据目录，避免与正在运行的旧版本共用单实例锁或水印存档。具体当轮执行结果见 `docs/VALIDATION.md`。
+- 工作区既有 `tests/` 删除保持不变，历史单元及端到端记录参见 `docs/VALIDATION.md`，本轮使用下列独立脚本。桌面测试使用隔离用户数据目录，避免与正在运行的旧版本共用单实例锁或水印存档。
+- `scripts/verify-windows-target.cjs`：检查 Windows x64 构建约束与其他平台、架构的拒绝路径。
+- `scripts/verify-windows-integration.cjs`：图片解码与输入限制、安装宏、首启及已有实例图片编辑；支持传入打包 EXE。
+- `scripts/verify-context-menu.cjs`：真实 Electron 画布右键编辑、标注选择与删除、历史、菜单定位与焦点；支持传入打包 EXE。
 - `scripts/verify-translation-service.cjs`、`verify-translation-inference.cjs`：翻译输入与生命周期回归，以及禁止网络调用后的真实模型推理、取消和异常恢复。
 - `scripts/verify-translation.cjs`：真实 Electron OCR 到翻译全流程；传入 EXE 路径可复验打包程序，包含翻译中截图、终止任务子进程后恢复、窗口归属及导出隔离。
 - `scripts/verify-image-clipboard.cjs`、`verify-localsend.cjs`、`verify-sharing-ui.cjs`：真实图片剪贴板字节／像素、LocalSend 交接与临时文件生命周期、分享菜单／压缩参数／窄窗布局与失败恢复。分享界面脚本支持传入打包 EXE 路径。
 
 浏览器演示位于 `src/demo.ts`，不参与真实 Electron 屏幕捕获。测试产物、构建产物和依赖目录通过 `.gitignore` 排除；源码与文档统一 UTF-8，提交说明使用中文。
 
-当前不支持一次拖动跨多块显示器连续框选，跨屏窗口只截取所在遮罩对应的可见部分；macOS、Linux 未完成原生窗口识别与实测。中英以外翻译、图层项目文件、自动保存和截图历史均未实现。架构中的能力描述不替代真实系统与安装包验证。
+当前不支持一次拖动跨多块显示器连续框选，跨屏窗口只截取所在遮罩对应的可见部分；不提供 macOS、Linux 或 Windows ARM64 发行版。中英以外翻译、图层项目文件、自动保存和截图历史均未实现。架构中的能力描述不替代真实系统与安装包验证。
