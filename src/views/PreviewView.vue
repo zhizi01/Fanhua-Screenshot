@@ -32,7 +32,6 @@ const ocrParagraphs = ref<OcrParagraph[]>([])
 const selectedParagraphId = ref<string>()
 const ocrHasResult = ref(false)
 const ocrSidebar = ref<InstanceType<typeof OcrSidebar>>()
-const ocrSourceRevision = ref(-1)
 let ocrRequest = 0
 const watermarkOpen = ref(false)
 const watermark = ref<WatermarkConfig>(defaultWatermark())
@@ -53,7 +52,6 @@ const surfaceStyle = computed(() => ({
 }))
 const history = new DocumentHistory({ layers: [], watermark: watermark.value })
 const historyTick = ref(0)
-const ocrStale = computed(() => ocrHasResult.value && ocrSourceRevision.value !== historyTick.value)
 const canUndo = computed(() => { void historyTick.value; return history.canUndo })
 const canRedo = computed(() => { void historyTick.value; return history.canRedo })
 const defaults = ref<TextStyle>({ font: 'Microsoft YaHei UI', size: 28, color: '#ef5c68' })
@@ -391,26 +389,27 @@ async function toggleOcr() {
   if (open && !ocrHasResult.value && !ocrBusy.value) void recognizeText()
 }
 async function recognizeText() {
-  if (ocrBusy.value || loading.value || error.value) return
+  if (ocrBusy.value || loading.value || error.value || !screenshot.value) return
   if (!window.fanhua) { ocrError.value = '文字识别需在桌面版运行。'; return }
   const request = ++ocrRequest
-  const revision = historyTick.value
+  const source = screenshot.value
   ocrBusy.value = true; ocrError.value = ''
-  // Freeze the document at the start of this request, independently of zoom.
+  // OCR always reads the immutable image opened in this preview. The composed
+  // export also contains annotations, watermarks and mosaics and is not OCR input.
   try {
-    const data = await exportImage()
+    const data = source.dataUrl
     const capabilities = await window.fanhua.getOcrCapabilities()
     if (request !== ocrRequest) return
     ocrCapabilities.value = capabilities
     if (!capabilities.available) throw new Error(capabilities.reason || '当前系统无法使用文字识别')
     const result = await window.fanhua.recognizeText(data, ocrLanguage.value)
-    if (request !== ocrRequest || !screenshot.value) return
+    if (request !== ocrRequest || screenshot.value?.id !== source.id) return
     ocrParagraphs.value = result.paragraphs.flatMap(paragraph => {
-      const bounds = clipOcrBounds(paragraph.bounds, screenshot.value!.width, screenshot.value!.height)
+      const bounds = clipOcrBounds(paragraph.bounds, source.width, source.height)
       return bounds ? [{ ...paragraph, bounds }] : []
     })
     selectedParagraphId.value = undefined
-    ocrHasResult.value = true; ocrSourceRevision.value = revision
+    ocrHasResult.value = true
   } catch (cause) {
     if (request === ocrRequest) ocrError.value = cause instanceof Error ? cause.message : '文字识别失败，请重试'
   } finally { if (request === ocrRequest) ocrBusy.value = false }
@@ -531,7 +530,7 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
           <div v-else-if="screenshot" class="canvas-surface" :style="surfaceStyle">
           <div class="canvas-wrapper" :style="{ width: `${screenshot.width * scale}px`, height: `${screenshot.height * scale}px` }">
             <canvas ref="canvas" :width="screenshot.width" :height="screenshot.height" :style="{ width: '100%', height: '100%', cursor: !editing ? 'default' : tool === 'select' ? 'default' : 'crosshair' }" tabindex="0" role="img" aria-label="截图编辑画布" data-testid="editor-canvas" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerCancel" @lostpointercapture="pointerCancel" @dblclick="doubleClick"></canvas>
-            <div v-if="ocrOpen" class="ocr-regions" aria-hidden="true" :class="{ stale: ocrStale }" data-testid="ocr-regions">
+            <div v-if="ocrOpen" class="ocr-regions" aria-hidden="true" data-testid="ocr-regions">
               <div v-for="(paragraph, index) in ocrParagraphs" :key="paragraph.id" class="ocr-region" :class="{ active: selectedParagraphId === paragraph.id }" :style="paragraphStyle(paragraph)" :data-paragraph-id="paragraph.id" data-testid="ocr-region"><span>{{ index + 1 }}</span></div>
             </div>
           </div>
@@ -583,7 +582,7 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
         </div>
         <div class="inspector-footer"><kbd>Delete</kbd> 删除 <span>·</span> <kbd>Ctrl Z</kbd> 撤销</div>
       </aside>
-      <OcrSidebar v-if="ocrOpen" ref="ocrSidebar" :busy="ocrBusy" :error="ocrError" :paragraphs="ocrParagraphs" :selected-id="selectedParagraphId" :languages="ocrCapabilities?.languages || []" :language="ocrLanguage" :stale="ocrStale" :available="isDesktop && ocrCapabilities?.available !== false" :has-result="ocrHasResult" @close="setOcrOpen(false)" @recognize="recognizeText" @update:language="ocrLanguage = $event" @select="selectParagraph" @update:text="editParagraph" />
+      <OcrSidebar v-if="ocrOpen" ref="ocrSidebar" :busy="ocrBusy" :error="ocrError" :paragraphs="ocrParagraphs" :selected-id="selectedParagraphId" :languages="ocrCapabilities?.languages || []" :language="ocrLanguage" :available="isDesktop && ocrCapabilities?.available !== false" :has-result="ocrHasResult" @close="setOcrOpen(false)" @recognize="recognizeText" @update:language="ocrLanguage = $event" @select="selectParagraph" @update:text="editParagraph" />
     </main>
     <footer class="statusbar"><div class="image-status"><span :class="['status-dot', { unsaved: !saved }]"></span><span>{{ saved ? '已保存到本地' : '未保存' }}</span><span v-if="pinned" class="pin-status">已置顶</span><span v-if="editing" class="status-hint">{{ toolHint }}</span></div><div class="zoom-controls" title="Ctrl + 鼠标滚轮缩放图片"><button class="icon-button" aria-label="缩小图片" @click="zoom(scale / 1.2)"><Minus :size="13" /></button><button class="zoom-value" aria-label="原始大小" title="原始大小 100%" @click="zoom(1)">{{ Math.round(scale * 100) }}%<ChevronDown :size="10" /></button><button class="icon-button" aria-label="放大图片" @click="zoom(scale * 1.2)"><Plus :size="13" /></button><i></i><button class="fit-button" :class="{ active: fitMode }" aria-label="适应窗口" title="适应窗口" @click="fit"><Maximize :size="13" /><span>适应</span></button></div></footer>
     <SaveExportDialog v-model:open="exportOpen" :width="screenshot?.width || 0" :height="screenshot?.height || 0" :busy="saving" @confirm="confirmSave" />
@@ -674,7 +673,6 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
 .ocr-region.active { border-color: #6e47b7; background: #9370ce30; box-shadow: 0 0 0 1px #8b65c754; }
 .ocr-region > span { position: absolute; top: 0; left: 0; padding: 0 3px; border-radius: 0 0 3px 0; color: #fff; background: #9577bf; font-size: 9px; line-height: 14px; }
 .ocr-region.active > span { background: #724fb0; }
-.ocr-regions.stale .ocr-region { border-color: #b49c72; background: #b49c720e; }
 .tool-list { min-width: 0; overflow-x: auto; }
 .tool-button { flex-shrink: 0; }
 .history-actions { flex-shrink: 0; }

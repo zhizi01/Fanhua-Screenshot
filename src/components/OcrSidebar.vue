@@ -11,7 +11,6 @@ const props = withDefaults(defineProps<{
   selectedId?: string
   languages: { tag: string; name: string }[]
   language: string
-  stale: boolean
   available: boolean
   hasResult?: boolean
 }>(), { hasResult: false })
@@ -84,11 +83,11 @@ function updateText(id: string, event: Event) {
     </header>
     <div class="ocr-controls">
       <ASelect size="small" aria-label="识别语言" :value="language" :options="languageOptions" :disabled="busy || !available" @change="value => emit('update:language', String(value))" />
-      <AButton size="small" :disabled="busy || !available" aria-label="重新识别" title="按当前图片内容重新识别" @click="emit('recognize')"><RefreshCw :size="13" />识别</AButton>
+      <AButton size="small" :disabled="busy || !available" aria-label="重新识别" title="重新识别打开时的原图，不含本次标注、水印和打码" @click="emit('recognize')"><RefreshCw :size="13" />识别</AButton>
     </div>
+    <p class="ocr-source-note">仅识别原图，不含本次标注、水印和打码。</p>
     <div v-if="busy" class="ocr-status" role="status"><LoaderCircle :size="14" class="spin" /><span>正在本机识别…</span></div>
     <div v-if="error" class="ocr-error" role="alert">{{ error }}</div>
-    <div v-else-if="stale && !busy" class="ocr-stale" role="status">图片已修改，点击识别可更新段落位置。</div>
     <p v-else-if="paragraphs.length && !busy" class="ocr-instruction">点击图片虚线框或段落可相互定位。</p>
 
     <div ref="list" class="paragraph-list" role="list" aria-label="识别段落" data-testid="ocr-paragraph-list" :aria-busy="busy">
@@ -126,9 +125,9 @@ function updateText(id: string, event: Event) {
 .ocr-sidebar{width:292px;min-width:0;max-width:calc(100% - 80px);flex-shrink:0;display:flex;flex-direction:column;min-height:0;border-left:1px solid #ddd9e4;background:#fff;color:#47404f;font-size:12px;overflow:hidden}
 .ocr-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px 7px 13px;flex-shrink:0}.ocr-heading h2{display:flex;align-items:center;gap:6px;margin:0;font-size:12px;font-weight:600}.ocr-heading h2>svg{color:#82708f}.ocr-heading h2>span{font-size:10px;color:#9b90a4;font-weight:400;margin-left:2px}.ocr-heading .icon-button{width:25px;height:25px;border-radius:4px}
 .ocr-controls{display:flex;gap:6px;padding:0 11px 9px;flex-shrink:0}.ocr-controls>.ant-select{flex:1;min-width:0}.ocr-controls :deep(.ant-select-selector){font-size:11px!important;border-radius:4px!important}.ocr-sidebar :deep(.ant-btn){display:inline-flex;align-items:center;justify-content:center;gap:5px;border-radius:4px;font-size:11px;box-shadow:none}.ocr-controls :deep(.ant-btn){padding:0 7px}
-.ocr-status,.ocr-error,.ocr-stale,.ocr-instruction{margin:0 11px 9px;flex-shrink:0;font-size:11px;line-height:1.6}.ocr-status{display:flex;align-items:center;gap:6px;color:#82728f}.ocr-error{padding:7px 9px;border-radius:4px;background:#fff2f3;color:#ae4555;white-space:pre-wrap;overflow-wrap:anywhere;max-height:100px;overflow:auto}.ocr-stale{padding:6px 8px;border-radius:4px;color:#9d7230;background:#fff8e9}.ocr-instruction{font-size:10px;color:#a092aa}
+.ocr-status,.ocr-error,.ocr-instruction,.ocr-source-note{margin:0 11px 9px;flex-shrink:0;font-size:11px;line-height:1.6}.ocr-status{display:flex;align-items:center;gap:6px;color:#82728f}.ocr-error{padding:7px 9px;border-radius:4px;background:#fff2f3;color:#ae4555;white-space:pre-wrap;overflow-wrap:anywhere;max-height:100px;overflow:auto}.ocr-source-note{font-size:10px;color:#8b7a9d}.ocr-instruction{font-size:10px;color:#a092aa}
 .paragraph-list{position:relative;flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:0 8px 8px;scrollbar-gutter:stable}.paragraph{border:1px solid #e6e1eb;border-radius:5px;margin-bottom:7px;background:#fdfcfe;overflow:hidden}.paragraph.selected{border-color:#b8a1dc;background:#faf7ff;box-shadow:0 0 0 1px #e9dff7}.paragraph-heading{display:flex;align-items:center;justify-content:space-between;padding:5px 6px 2px;gap:6px}.paragraph-location{display:flex;align-items:center;gap:6px;min-width:0;border:0;background:transparent;color:#8b7e99;padding:0;font-size:10px;line-height:22px;text-align:left}.paragraph-number{display:flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 3px;border-radius:3px;background:#eee9f4;color:#816b99;font-size:10px;font-variant-numeric:tabular-nums}.selected .paragraph-number{background:#e9def7;color:#7656aa}.copy-paragraph{width:22px;height:22px;border-radius:3px;flex-shrink:0}.copy-paragraph:disabled{opacity:.4}.paragraph-text{display:block;width:100%;padding:3px 10px 10px;border:0;background:transparent;text-align:left;font-size:12px;line-height:1.7;color:#61566c;white-space:pre-wrap;overflow-wrap:anywhere}.paragraph-text:hover{color:#7654ad;background:#f6f1fc}.paragraph-editor{display:block;width:calc(100% - 16px);margin:3px 8px 0;padding:5px 6px;resize:vertical;min-height:50px;max-height:250px;border:1px solid #ddd2ec;border-radius:3px;outline:0;background:#fff;color:#4f435b;font-size:12px;line-height:1.7;user-select:text}.paragraph-editor:focus{border-color:#a48bc7;box-shadow:0 0 0 2px #eee7f7}.edit-note{font-size:9px;line-height:1.4;color:#a18fae;margin:5px 9px 7px}.ocr-empty{display:flex;min-height:150px;height:100%;flex-direction:column;justify-content:center;align-items:center;text-align:center;color:#b6a8c3;padding:15px 8px}.ocr-empty p{font-size:12px;color:#8f7fa0;margin:12px 0 5px}.ocr-empty span{font-size:10px;color:#aa9db6;line-height:1.6}
 .ocr-footer{flex-shrink:0;padding:8px 10px 7px;border-top:1px solid #ebe7f0;background:#fdfcfe}.ocr-footer-actions{display:flex;align-items:center;justify-content:space-between;gap:8px}.ocr-footer p{margin:7px 0 0;text-align:center;font-size:9px;color:#a497ae;line-height:1.4}.spin{animation:ocr-spin 1s linear infinite}@keyframes ocr-spin{to{transform:rotate(360deg)}}
 @media(max-width:760px){.ocr-sidebar{width:260px}.ocr-heading{padding-left:10px}.ocr-instruction{font-size:9px}}
-@media(max-height:440px){.ocr-heading{padding-top:3px;padding-bottom:3px}.ocr-controls{padding-bottom:5px}.ocr-status,.ocr-error,.ocr-stale{margin-bottom:5px}.ocr-error{max-height:36px;flex-shrink:1;padding:4px 6px;min-height:24px}.ocr-instruction{display:none}.ocr-footer{padding-top:5px;padding-bottom:5px}.ocr-footer p{display:none}}
+@media(max-height:440px){.ocr-heading{padding-top:3px;padding-bottom:3px}.ocr-controls{padding-bottom:5px}.ocr-status,.ocr-error,.ocr-source-note{margin-bottom:5px}.ocr-error{max-height:36px;flex-shrink:1;padding:4px 6px;min-height:24px}.ocr-instruction{display:none}.ocr-footer{padding-top:5px;padding-bottom:5px}.ocr-footer p{display:none}}
 </style>
