@@ -339,8 +339,12 @@ function installIpc() {
   })
   trustedHandler('preview:pin', ['preview'], (win, pinned) => {
     if (typeof pinned !== 'boolean') throw new Error('固定状态无效')
-    win.setAlwaysOnTop(pinned, 'floating')
-    return win.isAlwaysOnTop()
+    // On Windows, use the native topmost flag without taskbar-relative ordering.
+    // The "floating" level can lose topmost status on Windows 11 desktops.
+    win.setAlwaysOnTop(pinned, process.platform === 'win32' ? 'normal' : 'floating')
+    const actual = win.isAlwaysOnTop()
+    if (actual !== pinned) throw new Error('系统未能更新窗口置顶状态，请重试')
+    return actual
   })
   trustedHandler('preview:editing', ['preview'], (win, editing) => {
     if (typeof editing !== 'boolean') throw new Error('编辑状态无效')
