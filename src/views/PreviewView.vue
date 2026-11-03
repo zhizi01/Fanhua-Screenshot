@@ -12,6 +12,7 @@ import SaveExportDialog from '../components/SaveExportDialog.vue'
 import OcrSidebar from '../components/OcrSidebar.vue'
 import { hitOcrParagraph, clipOcrBounds } from '../ocr/regions'
 import WatermarkPanel from '../components/WatermarkPanel.vue'
+import { useParagraphTranslation } from '../services/translation'
 
 const screenshot = ref<Screenshot>()
 const isDesktop = !!window.fanhua
@@ -32,6 +33,8 @@ const ocrParagraphs = ref<OcrParagraph[]>([])
 const selectedParagraphId = ref<string>()
 const ocrHasResult = ref(false)
 const ocrSidebar = ref<InstanceType<typeof OcrSidebar>>()
+const translation = useParagraphTranslation(ocrParagraphs, () => screenshot.value?.id)
+const translationState = translation.state
 let ocrRequest = 0
 const watermarkOpen = ref(false)
 const watermark = ref<WatermarkConfig>(defaultWatermark())
@@ -377,6 +380,7 @@ async function copy() {
 async function setOcrOpen(open: boolean) {
   cancelDrag()
   ocrOpen.value = open
+  if (!open) void translation.cancel(false)
   try { await window.fanhua?.setPreviewLayout({ editing: editing.value, ocr: open }) }
   catch { message.error('窗口大小调整失败，仍可继续使用识别面板') }
   await nextTick()
@@ -388,9 +392,16 @@ async function toggleOcr() {
   await setOcrOpen(open)
   if (open && !ocrHasResult.value && !ocrBusy.value) void recognizeText()
 }
+async function showTranslation() {
+  if (loading.value || error.value) return
+  await setOcrOpen(true)
+  void translation.setOpen(true)
+  if (!ocrHasResult.value && !ocrBusy.value) void recognizeText()
+}
 async function recognizeText() {
   if (ocrBusy.value || loading.value || error.value || !screenshot.value) return
   if (!window.fanhua) { ocrError.value = '文字识别需在桌面版运行。'; return }
+  translation.reset()
   const request = ++ocrRequest
   const source = screenshot.value
   ocrBusy.value = true; ocrError.value = ''
@@ -513,7 +524,7 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
         <AButton size="small" type="text" :class="{ 'is-pinned': pinned }" :title="pinned ? '取消置顶' : '固定到屏幕前方'" aria-label="固定窗口" :aria-pressed="pinned" @click="togglePin"><template #icon><PinOff v-if="pinned" :size="15" /><Pin v-else :size="15" /></template><span class="action-label">{{ pinned ? '已固定' : '固定' }}</span></AButton>
         <AButton size="small" type="text" :disabled="loading || !!error" aria-label="复制图片" title="复制图片 Ctrl+C" @click="copy"><template #icon><Copy :size="15" /></template><span class="action-label">复制</span></AButton>
         <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': ocrOpen }" :aria-pressed="ocrOpen" aria-label="识别文字" title="显示或收起文字识别面板" @click="toggleOcr"><template #icon><ScanText :size="15" /></template><span class="action-label">识别文字</span></AButton>
-        <AButton size="small" type="text" disabled aria-label="翻译（开发中）" title="翻译功能开发中"><template #icon><Languages :size="15" /></template><span class="action-label">翻译</span></AButton>
+        <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': ocrOpen && translationState.open }" aria-label="中英翻译" title="在识别段落下显示本地中英译文" @click="showTranslation"><template #icon><Languages :size="15" /></template><span class="action-label">翻译</span></AButton>
         <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': watermark.enabled }" aria-label="水印设置" title="添加文字或图片水印" @click="watermarkOpen = true"><template #icon><Stamp :size="15" /></template><span class="action-label">水印</span></AButton>
         <AButton size="small" type="text" :disabled="loading || !!error" aria-label="进入编辑模式" :title="editing ? '完成编辑' : '编辑图片'" :class="{ 'edit-active': editing }" @click="toggleEditing"><template #icon><Check v-if="editing" :size="15" /><Pencil v-else :size="15" /></template><span class="action-label">{{ editing ? '完成' : '编辑' }}</span></AButton>
         <AButton size="small" type="primary" :loading="saving" :disabled="loading || !!error" aria-label="保存图片" title="选择格式并保存 Ctrl+S" @click="save"><template #icon><Download :size="15" /></template><span class="action-label">保存</span></AButton>
@@ -582,7 +593,7 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
         </div>
         <div class="inspector-footer"><kbd>Delete</kbd> 删除 <span>·</span> <kbd>Ctrl Z</kbd> 撤销</div>
       </aside>
-      <OcrSidebar v-if="ocrOpen" ref="ocrSidebar" :busy="ocrBusy" :error="ocrError" :paragraphs="ocrParagraphs" :selected-id="selectedParagraphId" :languages="ocrCapabilities?.languages || []" :language="ocrLanguage" :available="isDesktop && ocrCapabilities?.available !== false" :has-result="ocrHasResult" @close="setOcrOpen(false)" @recognize="recognizeText" @update:language="ocrLanguage = $event" @select="selectParagraph" @update:text="editParagraph" />
+      <OcrSidebar v-if="ocrOpen" ref="ocrSidebar" :busy="ocrBusy" :error="ocrError" :paragraphs="ocrParagraphs" :selected-id="selectedParagraphId" :languages="ocrCapabilities?.languages || []" :language="ocrLanguage" :available="isDesktop && ocrCapabilities?.available !== false" :has-result="ocrHasResult" :translation="translationState" @close="setOcrOpen(false)" @recognize="recognizeText" @update:language="ocrLanguage = $event" @select="selectParagraph" @update:text="editParagraph" @translation:open="translation.setOpen" @translation:direction="translation.changeDirection" @translate="translation.translate" @translation:cancel="translation.cancel()" @translation:retry="translation.setOpen(true)" />
     </main>
     <footer class="statusbar"><div class="image-status"><span :class="['status-dot', { unsaved: !saved }]"></span><span>{{ saved ? '已保存到本地' : '未保存' }}</span><span v-if="pinned" class="pin-status">已置顶</span><span v-if="editing" class="status-hint">{{ toolHint }}</span></div><div class="zoom-controls" title="Ctrl + 鼠标滚轮缩放图片"><button class="icon-button" aria-label="缩小图片" @click="zoom(scale / 1.2)"><Minus :size="13" /></button><button class="zoom-value" aria-label="原始大小" title="原始大小 100%" @click="zoom(1)">{{ Math.round(scale * 100) }}%<ChevronDown :size="10" /></button><button class="icon-button" aria-label="放大图片" @click="zoom(scale * 1.2)"><Plus :size="13" /></button><i></i><button class="fit-button" :class="{ active: fitMode }" aria-label="适应窗口" title="适应窗口" @click="fit"><Maximize :size="13" /><span>适应</span></button></div></footer>
     <SaveExportDialog v-model:open="exportOpen" :width="screenshot?.width || 0" :height="screenshot?.height || 0" :busy="saving" @confirm="confirmSave" />
