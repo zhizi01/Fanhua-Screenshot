@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Button as AButton, InputNumber as AInputNumber, Select as ASelect, Slider as ASlider, Switch as ASwitch, TabPane as ATabPane, Tabs as ATabs } from 'ant-design-vue'
 import { Check, FolderOpen, LoaderCircle, RefreshCw, Save, Settings2, Share2, Type, X } from 'lucide-vue-next'
 import FlowerLogo from '../components/FlowerLogo.vue'
+import CaptureShortcutSetting from '../components/CaptureShortcutSetting.vue'
+import { formatCaptureShortcut } from '../settings/capture-shortcut'
 import type { AppSettings, AppState, EditorPreferences, SettingsPatch } from '../shared'
 
 const api = window.fanhua
@@ -30,6 +32,7 @@ const languageOptions = computed(() => {
   return values
 })
 const lossy = computed(() => settings.value?.imageFormat === 'jpeg' || settings.value?.imageFormat === 'webp')
+const savedShortcutLabel = computed(() => formatCaptureShortcut(settings.value?.captureShortcut || 'Alt+A'))
 const formatOptions = [{ value: 'png', label: 'PNG · 无损图片' }, { value: 'jpeg', label: 'JPEG · 照片图片' }, { value: 'webp', label: 'WebP · 轻量图片' }, { value: 'bmp', label: 'BMP · 位图图片' }, { value: 'pdf', label: 'PDF · 文档' }]
 const markerOptions = [{ value: 'number', label: '1、2、3 · 阿拉伯数字' }, { value: 'letter', label: 'A、B、C · 字母' }, { value: 'chinese', label: '壹、贰、叁 · 中文大写' }]
 const borderOptions = [{ value: 'solid', label: '实线' }, { value: 'dashed', label: '虚线' }, { value: 'dotted', label: '点线' }]
@@ -98,7 +101,7 @@ async function update(patch: SettingsPatch, key: string) {
   if (!api || !settings.value || busy.value) return
   const previous = settings.value
   savingKey.value = key; error.value = ''; saved.value = false
-  accept({ ...previous, ...patch, editor: { ...previous.editor, ...patch.editor } })
+  if (key !== 'captureShortcut') accept({ ...previous, ...patch, editor: { ...previous.editor, ...patch.editor } })
   try {
     const result = await api.updateSettings(patch)
     if (!disposed) { accept(result); saved.value = true }
@@ -110,7 +113,11 @@ async function update(patch: SettingsPatch, key: string) {
       error.value = reason(cause, '保存失败，已恢复原设置')
     }
   } finally {
-    if (!disposed) { savingKey.value = ''; void refreshState() }
+    if (!disposed) {
+      if (key === 'captureShortcut') await refreshState()
+      else void refreshState()
+      savingKey.value = ''
+    }
   }
 }
 function updateEditor<K extends keyof EditorPreferences>(key: K, value: EditorPreferences[K]) {
@@ -187,7 +194,7 @@ onBeforeUnmount(() => { disposed = true; loadRequest++; stateRequest++; unsubscr
             <div><label>启动时显示通知</label><p>提醒你截图工具已在后台准备就绪。</p></div>
             <ASwitch aria-label="启动时显示通知" :checked="settings.startupNotification" :disabled="busy" :loading="savingKey === 'startupNotification'" @change="value => update({ startupNotification: Boolean(value) }, 'startupNotification')" />
           </div>
-          <details class="notification-preview"><summary>查看通知内容</summary><div><strong>繁花有图</strong><p>Hello，现在繁花有图已经在你的设备中完成了准备，随时可以通过Alt + A 发起截图。在不需要我的时候，我会一直休眠哦~</p></div></details>
+          <details class="notification-preview"><summary>查看通知内容</summary><div><strong>繁花有图</strong><p>Hello，现在繁花有图已经在你的设备中完成了准备，随时可以通过{{ savedShortcutLabel }} 发起截图。在不需要我的时候，我会一直休眠哦~</p></div></details>
           <div class="setting-row">
             <div><label>图片和 PDF 右键入口</label><p>在资源管理器中显示“使用繁花有图编辑”。</p><p v-if="state?.contextMenu.available">已注册 {{ state.contextMenu.registered }} / {{ state.contextMenu.total }} 种文件格式</p><p v-if="state?.contextMenu.reason" class="muted">{{ state.contextMenu.reason }}</p></div>
             <ASwitch aria-label="启用资源管理器右键菜单" :checked="savingKey === 'contextMenuEnabled' ? settings.contextMenuEnabled : state?.contextMenu.enabled || false" :disabled="busy || !state?.contextMenu.available" :loading="savingKey === 'contextMenuEnabled'" @change="value => update({ contextMenuEnabled: Boolean(value) }, 'contextMenuEnabled')" />
@@ -199,10 +206,7 @@ onBeforeUnmount(() => { disposed = true; loadRequest++; stateRequest++; unsubscr
             <div><label>截图后直接进入编辑</label><p>关闭时先预览，再按需添加标注。</p></div>
             <ASwitch aria-label="截图后直接进入编辑" :checked="settings.captureOpenEditor" :disabled="busy" :loading="savingKey === 'captureOpenEditor'" @change="value => update({ captureOpenEditor: Boolean(value) }, 'captureOpenEditor')" />
           </div>
-          <div class="setting-row shortcut-row">
-            <div><label>截图快捷键</label><p :class="{ 'inline-warning': state && !state.shortcutRegistered }">{{ state?.shortcutRegistered ? '快捷键已就绪。' : 'Alt + A 暂时无法启用，请解除冲突后重试。' }}</p></div>
-            <div class="shortcut-control"><span class="key-combination" aria-label="Alt 加 A"><kbd>Alt</kbd><span>+</span><kbd>A</kbd></span><AButton v-if="state && !state.shortcutRegistered" size="small" :disabled="busy" :loading="savingKey === 'shortcut'" aria-label="重试注册截图快捷键" @click="retryShortcut">重试注册</AButton></div>
-          </div>
+          <CaptureShortcutSetting :saved-shortcut="settings.captureShortcut || 'Alt+A'" :active-shortcut="state?.shortcut || settings.captureShortcut || 'Alt+A'" :registered="state?.shortcutRegistered" :reason="state?.shortcutReason" :busy="busy" :applying="savingKey === 'captureShortcut'" :retrying="savingKey === 'shortcut'" @apply="value => update({ captureShortcut: value }, 'captureShortcut')" @retry="retryShortcut" />
           <p class="page-note">截图和打开文件都从系统托盘进入；双击托盘图标可打开设置。</p>
         </div>
       </ATabPane>
