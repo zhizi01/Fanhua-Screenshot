@@ -1,6 +1,6 @@
 import type { Rect, WatermarkConfig } from '../shared'
 
-export type Tool = 'select' | 'text' | 'marker' | 'mosaic' | 'arrow'
+export type Tool = 'select' | 'text' | 'marker' | 'mosaic' | 'arrow' | 'rectangle' | 'ellipse'
 export type NumberStyle = 'number' | 'letter' | 'chinese'
 export interface TextStyle { font: string; size: number; color: string }
 interface BaseLayer { id: string; x: number; y: number }
@@ -8,7 +8,13 @@ export interface TextLayer extends BaseLayer, TextStyle { type: 'text'; text: st
 export interface MarkerLayer extends BaseLayer, TextStyle { type: 'marker'; number: number; style: NumberStyle; text: string; headSize?: number }
 export interface MosaicLayer extends BaseLayer { type: 'mosaic'; width: number; height: number; strength: number }
 export interface ArrowLayer extends BaseLayer { type: 'arrow'; endX: number; endY: number; color: string; lineWidth: number; headSize: number }
-export type Layer = TextLayer | MarkerLayer | MosaicLayer | ArrowLayer
+export type BorderStyle = 'solid' | 'dashed' | 'dotted'
+interface ShapeFields extends BaseLayer { width: number; height: number; color: string; lineWidth: number; borderStyle: BorderStyle }
+export interface RectangleLayer extends ShapeFields { type: 'rectangle' }
+export interface EllipseLayer extends ShapeFields { type: 'ellipse' }
+export type ShapeLayer = RectangleLayer | EllipseLayer
+export type ShapeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+export type Layer = TextLayer | MarkerLayer | MosaicLayer | ArrowLayer | ShapeLayer
 export interface Point { x: number; y: number }
 
 export function sequenceLabel(value: number, style: NumberStyle): string {
@@ -41,6 +47,103 @@ export function normalizeRect(a: Point, b: Point, width: number, height: number)
   const right = Math.max(0, Math.min(width, Math.max(a.x, b.x)))
   const bottom = Math.max(0, Math.min(height, Math.max(a.y, b.y)))
   return { x: Math.round(left), y: Math.round(top), width: Math.round(right - left), height: Math.round(bottom - top) }
+}
+
+/** Shape rectangles describe the complete painted outer edge, not the stroke center. */
+export function shapeRect(origin: Point, point: Point, width: number, height: number, constrain = false): Rect {
+  const start = { x: Math.max(0, Math.min(width, origin.x)), y: Math.max(0, Math.min(height, origin.y)) }
+  const end = { x: Math.max(0, Math.min(width, point.x)), y: Math.max(0, Math.min(height, point.y)) }
+  if (constrain) {
+    const dx = end.x < start.x ? -1 : 1
+    const dy = end.y < start.y ? -1 : 1
+    const side = Math.min(Math.max(Math.abs(end.x - start.x), Math.abs(end.y - start.y)), dx > 0 ? width - start.x : start.x, dy > 0 ? height - start.y : start.y)
+    end.x = start.x + side * dx; end.y = start.y + side * dy
+  }
+  return normalizeRect(start, end, width, height)
+}
+
+export function shapeHandles(layer: ShapeLayer): { handle: ShapeHandle; point: Point }[] {
+  const left = layer.x, top = layer.y, right = left + layer.width, bottom = top + layer.height
+  const midX = (left + right) / 2, midY = (top + bottom) / 2
+  return [
+    { handle: 'nw', point: { x: left, y: top } }, { handle: 'n', point: { x: midX, y: top } },
+    { handle: 'ne', point: { x: right, y: top } }, { handle: 'e', point: { x: right, y: midY } },
+    { handle: 'se', point: { x: right, y: bottom } }, { handle: 's', point: { x: midX, y: bottom } },
+    { handle: 'sw', point: { x: left, y: bottom } }, { handle: 'w', point: { x: left, y: midY } },
+  ]
+}
+
+export function shapeHandleAt(layer: ShapeLayer, point: Point, tolerance: number): ShapeHandle | undefined {
+  return shapeHandles(layer).map(item => ({ ...item, distance: Math.hypot(point.x - item.point.x, point.y - item.point.y) }))
+    .filter(item => item.distance <= tolerance).sort((a, b) => a.distance - b.distance)[0]?.handle
+}
+
+/** Resize from an immutable pointer-down snapshot, allowing handles to cross. */
+export function resizeShape(layer: ShapeLayer, handle: ShapeHandle, point: Point, width: number, height: number, constrain = false): ShapeLayer {
+  const left = layer.x, top = layer.y, right = left + layer.width, bottom = top + layer.height
+  const x = Math.max(0, Math.min(width, point.x)), y = Math.max(0, Math.min(height, point.y))
+  let rect: Rect
+  if (handle.length === 2) {
+    rect = shapeRect({ x: handle.includes('w') ? right : left, y: handle.includes('n') ? bottom : top }, { x, y }, width, height, constrain)
+  } else if (handle === 'n' || handle === 's') {
+    const anchor = handle === 'n' ? bottom : top
+    if (constrain) {
+      const center = (left + right) / 2
+      const size = Math.min(Math.abs(y - anchor), center * 2, (width - center) * 2)
+      rect = normalizeRect({ x: center - size / 2, y: anchor }, { x: center + size / 2, y: anchor + (y < anchor ? -size : size) }, width, height)
+    } else rect = normalizeRect({ x: left, y: anchor }, { x: right, y }, width, height)
+  } else {
+    const anchor = handle === 'w' ? right : left
+    if (constrain) {
+      const center = (top + bottom) / 2
+      const size = Math.min(Math.abs(x - anchor), center * 2, (height - center) * 2)
+      rect = normalizeRect({ x: anchor, y: center - size / 2 }, { x: anchor + (x < anchor ? -size : size), y: center + size / 2 }, width, height)
+    } else rect = normalizeRect({ x: anchor, y: top }, { x, y: bottom }, width, height)
+  }
+  // Keep a collapsed handle selectable, even when released at its opposite edge.
+  rect.width = Math.max(1, rect.width); rect.height = Math.max(1, rect.height)
+  rect.x = Math.max(0, Math.min(width - rect.width, rect.x)); rect.y = Math.max(0, Math.min(height - rect.height, rect.y))
+  return { ...layer, ...rect }
+}
+
+export function shapeStrokeWidth(layer: ShapeLayer): number {
+  return Math.max(0, Math.min(layer.lineWidth, layer.width, layer.height))
+}
+
+/** Accurate closest-point distance, including strongly flattened ellipses. */
+function ellipseDistance(point: Point, center: Point, rx: number, ry: number): number {
+  const x = Math.abs(point.x - center.x), y = Math.abs(point.y - center.y)
+  if (rx <= 0 || ry <= 0) return distanceToSegment({ x, y }, { x: 0, y: ry }, { x: rx, y: 0 })
+  const squared = (angle: number) => (rx * Math.cos(angle) - x) ** 2 + (ry * Math.sin(angle) - y) ** 2
+  const step = Math.PI / 64
+  let best = 0, bestDistance = squared(0)
+  for (let index = 1; index <= 32; index++) {
+    const value = squared(index * step)
+    if (value < bestDistance) { best = index; bestDistance = value }
+  }
+  let low = Math.max(0, best - 1) * step, high = Math.min(32, best + 1) * step
+  // Golden-section refinement around the closest coarse point avoids unstable
+  // Newton steps for axis-aligned points and thin ellipses.
+  const ratio = (Math.sqrt(5) - 1) / 2
+  let a = high - ratio * (high - low), b = low + ratio * (high - low)
+  let fa = squared(a), fb = squared(b)
+  for (let index = 0; index < 30; index++) {
+    if (fa < fb) { high = b; b = a; fb = fa; a = high - ratio * (high - low); fa = squared(a) }
+    else { low = a; a = b; fa = fb; b = low + ratio * (high - low); fb = squared(b) }
+  }
+  return Math.sqrt(Math.min(bestDistance, fa, fb))
+}
+
+export function hitShape(layer: ShapeLayer, point: Point, padding: number): boolean {
+  if (layer.width <= 0 || layer.height <= 0) return false
+  const stroke = shapeStrokeWidth(layer)
+  if (layer.type === 'rectangle') {
+    const outside = point.x < layer.x - padding || point.x > layer.x + layer.width + padding || point.y < layer.y - padding || point.y > layer.y + layer.height + padding
+    const inside = point.x > layer.x + stroke + padding && point.x < layer.x + layer.width - stroke - padding && point.y > layer.y + stroke + padding && point.y < layer.y + layer.height - stroke - padding
+    return !outside && !inside
+  }
+  const center = { x: layer.x + layer.width / 2, y: layer.y + layer.height / 2 }
+  return ellipseDistance(point, center, (layer.width - stroke) / 2, (layer.height - stroke) / 2) <= stroke / 2 + padding
 }
 
 export function imagePoint(clientX: number, clientY: number, bounds: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>, width: number, height: number): Point {
@@ -92,7 +195,7 @@ export function arrowEndpointAt(layer: ArrowLayer, point: Point, tolerance: numb
 }
 
 export function layerBounds(layer: Layer, measure?: (text: string, font: string, size: number) => number): Rect {
-  if (layer.type === 'mosaic') return { x: layer.x, y: layer.y, width: layer.width, height: layer.height }
+  if (layer.type === 'mosaic' || layer.type === 'rectangle' || layer.type === 'ellipse') return { x: layer.x, y: layer.y, width: layer.width, height: layer.height }
   if (layer.type === 'arrow') {
     const geometry = arrowGeometry(layer)
     const xs = [geometry.start.x, geometry.end.x, geometry.left.x, geometry.right.x]
@@ -109,6 +212,7 @@ export function layerBounds(layer: Layer, measure?: (text: string, font: string,
 
 export function hitTest(layers: Layer[], point: Point, padding = 4, measure?: (text: string, font: string, size: number) => number): Layer | undefined {
   return visualLayers(layers).reverse().find(layer => {
+    if (layer.type === 'rectangle' || layer.type === 'ellipse') return hitShape(layer, point, padding)
     if (layer.type === 'arrow') {
       const g = arrowGeometry(layer)
       return distanceToSegment(point, g.start, g.base) <= layer.lineWidth / 2 + padding

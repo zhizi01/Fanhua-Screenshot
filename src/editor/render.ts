@@ -1,4 +1,4 @@
-import { arrowGeometry, layerBounds, markerDiameter, sequenceLabel, type ArrowLayer, type Layer, type MosaicLayer } from './model'
+import { arrowGeometry, layerBounds, markerDiameter, sequenceLabel, shapeHandles, shapeStrokeWidth, type ArrowLayer, type Layer, type MosaicLayer, type ShapeLayer } from './model'
 import type { WatermarkConfig } from '../shared'
 import { paintWatermark } from '../watermark/render'
 
@@ -47,6 +47,24 @@ export function paintArrow(context: CanvasRenderingContext2D, layer: ArrowLayer)
   context.restore()
 }
 
+/** Stroke inward from the selected outer rectangle, preserving image edges. */
+export function paintShape(context: CanvasRenderingContext2D, layer: ShapeLayer) {
+  const stroke = shapeStrokeWidth(layer)
+  if (layer.width <= 0 || layer.height <= 0 || stroke <= 0) return
+  const inset = stroke / 2
+  context.save()
+  context.strokeStyle = layer.color
+  context.lineWidth = stroke
+  context.lineJoin = 'miter'
+  context.lineCap = layer.borderStyle === 'dotted' ? 'round' : 'butt'
+  context.setLineDash(layer.borderStyle === 'dashed' ? [stroke * 3, stroke * 2] : layer.borderStyle === 'dotted' ? [0, stroke * 2.5] : [])
+  context.beginPath()
+  if (layer.type === 'rectangle') context.rect(layer.x + inset, layer.y + inset, layer.width - stroke, layer.height - stroke)
+  else context.ellipse(layer.x + layer.width / 2, layer.y + layer.height / 2, Math.max(0, (layer.width - stroke) / 2), Math.max(0, (layer.height - stroke) / 2), 0, 0, Math.PI * 2)
+  context.stroke()
+  context.restore()
+}
+
 export function renderScene(context: CanvasRenderingContext2D, source: CanvasImageSource, width: number, height: number, layers: Layer[], watermark?: WatermarkConfig) {
   context.clearRect(0, 0, width, height)
   context.drawImage(source, 0, 0, width, height)
@@ -55,6 +73,7 @@ export function renderScene(context: CanvasRenderingContext2D, source: CanvasIma
   for (const layer of layers) {
     if (layer.type === 'mosaic') continue
     if (layer.type === 'arrow') { paintArrow(context, layer); continue }
+    if (layer.type === 'rectangle' || layer.type === 'ellipse') { paintShape(context, layer); continue }
     context.save()
     context.font = canvasFont(layer.font, layer.size)
     context.textBaseline = 'top'
@@ -106,6 +125,19 @@ export function renderSelection(context: CanvasRenderingContext2D, layer: Layer,
     for (const point of [{ x: layer.x, y: layer.y }, { x: layer.endX, y: layer.endY }]) {
       context.fillStyle = '#ffffff'
       context.beginPath(); context.arc(point.x, point.y, 5 / scale, 0, Math.PI * 2); context.fill(); context.stroke()
+    }
+    context.restore()
+    return
+  }
+  if (layer.type === 'rectangle' || layer.type === 'ellipse') {
+    context.setLineDash([5 / scale, 3 / scale])
+    context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height)
+    context.setLineDash([])
+    context.fillStyle = '#ffffff'
+    const side = 7 / scale
+    for (const { point } of shapeHandles(layer)) {
+      context.fillRect(point.x - side / 2, point.y - side / 2, side, side)
+      context.strokeRect(point.x - side / 2, point.y - side / 2, side, side)
     }
     context.restore()
     return
