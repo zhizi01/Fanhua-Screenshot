@@ -1,11 +1,13 @@
 {
   "name": "fanhua-screenshot",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "繁花有图 · 轻盈、自在的桌面截图与标注工具",
   "author": "繁花有图",
   "type": "module",
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -22,6 +24,7 @@
   "dependencies": {
     "ant-design-vue": "^4.2.6",
     "lucide-vue-next": "^1.0.0",
+    "tesseract.js": "^7.0.0",
     "vue": "^3.5.13"
   },
   "devDependencies": {
@@ -38,10 +41,46 @@
   "build": {
     "appId": "cn.fanhua.screenshot",
     "productName": "繁花有图",
-    "directories": { "output": "release" },
-    "files": ["dist/**/*", "electron/**/*", "package.json"],
-    "asarUnpack": ["electron/native/**/*"],
-    "win": { "target": ["nsis"], "icon": "build/icon.ico", "artifactName": "Fanhua-Screenshot-${version}-Setup.${ext}" },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "shortcutName": "繁花有图", "language": "2052" }
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "electron/native/**/*",
+      "electron/ocr-worker.cjs",
+      "node_modules/tesseract.js/**/*",
+      "node_modules/tesseract.js-core/**/*",
+      "node_modules/bmp-js/**/*",
+      "node_modules/idb-keyval/**/*",
+      "node_modules/is-url/**/*",
+      "node_modules/node-fetch/**/*",
+      "node_modules/regenerator-runtime/**/*",
+      "node_modules/wasm-feature-detect/**/*",
+      "node_modules/zlibjs/**/*",
+      "node_modules/whatwg-url/**/*",
+      "node_modules/tr46/**/*",
+      "node_modules/webidl-conversions/**/*"
+    ],
+    "extraResources": [
+      { "from": "resources/ocr", "to": "ocr" }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Fanhua-Screenshot-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "繁花有图",
+      "language": "2052"
+    }
   }
 }

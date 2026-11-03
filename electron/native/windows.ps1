@@ -92,9 +92,29 @@ while ($null -ne ($line = [Console]::ReadLine())) {
     switch ($request.command) {
       'windows' { $data = @([FanhuaNative]::List([int]$request.excludeProcessId)) }
       'fonts' {
+        $names = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        # WPF exposes OpenType/DirectWrite families and localized aliases, unlike
+        # the GDI collection alone. Per-user installed fonts are included too.
+        try {
+          Add-Type -AssemblyName PresentationCore
+          $families = @([System.Windows.Media.Fonts]::SystemFontFamilies)
+          $userFonts = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts'
+          if (Test-Path -LiteralPath $userFonts) {
+            $families += @([System.Windows.Media.Fonts]::GetFontFamilies($userFonts + '\'))
+          }
+          foreach ($family in $families) {
+            foreach ($name in $family.FamilyNames.Values) {
+              if (![string]::IsNullOrWhiteSpace($name)) { [void]$names.Add($name.Trim()) }
+            }
+          }
+        } catch { # Older systems may not have WPF; retain the GDI enumeration.
+        }
         Add-Type -AssemblyName System.Drawing
         $collection = New-Object System.Drawing.Text.InstalledFontCollection
-        try { $data = @($collection.Families | ForEach-Object { $_.Name } | Sort-Object -Unique) }
+        try {
+          foreach ($family in $collection.Families) { [void]$names.Add($family.Name) }
+          $data = @($names | Sort-Object)
+        }
         finally { $collection.Dispose() }
       }
       default { throw 'Unknown helper command' }
