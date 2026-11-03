@@ -7,7 +7,7 @@
 Windows 版 LocalSend 支持直接接收文件路径参数：
 
 ```text
-"D:\AppFile\LocalSend\localsend_app.exe" "C:\图片目录\已编辑图片.png"
+"C:\LocalSend\localsend_app.exe" "C:\图片目录\已编辑图片.png"
 ```
 
 官方 v1.17.0 的 [`LoadSelectionFromArgsAction`](https://github.com/localsend/localsend/blob/v1.17.0/app/lib/provider/selection/selected_sending_files_provider.dart) 遍历启动参数，忽略选项参数，将存在的文件加入发送列表。官方 [`init.dart`](https://github.com/localsend/localsend/blob/v1.17.0/app/lib/config/init.dart) 处理首个实例和已有实例：启动参数加载成功后切换至发送页，第二个实例将参数交给已有实例后正常退出；[`tray_helper.dart`](https://github.com/localsend/localsend/blob/v1.17.0/app/lib/util/native/tray_helper.dart) 负责从托盘显示并聚焦窗口。
@@ -29,22 +29,3 @@ Windows 版 LocalSend 支持直接接收文件路径参数：
 图片写入系统临时目录下的 `fanhua-localsend`，名称包含“繁花有图”、时间及随机标识。分享后不立即删除，关闭繁花有图时也不删除，避免 LocalSend 尚未读取图片。
 
 应用启动及下一次共享会清理该目录内超过 **7 天**的本应用命名 PNG。清理只处理目录内符合命名规则的普通文件，跳过链接、子目录及其他文件，不递归清理用户文件。新一次启动发生错误时，仅删除本次新建的 PNG。已交给 LocalSend、但长期未发送的图片可能在过期清理后失效，届时重新共享即可。
-
-## 验证
-
-执行：
-
-```powershell
-npm run test:localsend
-```
-
-`scripts/verify-localsend.cjs` 使用隔离夹具验证完整 PNG 字节保留、中文/空格/特殊字符路径参数、已有实例退出码、便携路径记忆、取消不导出、启动失败删除新文件、并发防重入，以及只清理过期的本应用文件。报告写入 `artifacts/localsend-verification.json`。这个自动检查模拟了子进程，不能替代 LocalSend GUI 验证。
-
-2026-11-03 在本机实际验证了 `D:\AppFile\LocalSend\localsend_app.exe`，产品版本 **1.17.0+58**。使用不含用户截图的 800×400 合成测试 PNG：
-
-1. 自动检测到现有安装，启动新实例后进入发送页。
-2. GUI 显示已选择 1 张图片、16.6 KB；进入选择编辑页确认文件名与缩略图对应测试图片。
-3. 再次通过文件参数启动时，已有实例正常接收，未多开常驻实例。
-4. 未选择接收设备、未执行图片传输。测试完成后将窗口最小化，保留测试图片供 LocalSend 读取。
-
-实机记录在 `artifacts/localsend-real-check/launch.json`。已验证的范围是启动及文件预选；网络发现、跨设备传输与接收端行为由 LocalSend 处理，未在本次测试中执行。

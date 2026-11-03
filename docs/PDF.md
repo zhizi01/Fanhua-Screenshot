@@ -1,10 +1,10 @@
 # PDF 支持
 
-1.6.0 在原有图片编辑器内增加 PDF 分页操作，不引入文档库或账户流程。
+PDF 在图片编辑器内按页查看、标注和导出，文件在本机处理。
 
 ## 使用
 
-托盘的“打开图片 / PDF”同时接受图片与 PDF；1.7.0 起，安装程序默认不添加右键菜单，可在设置中启用 PDF 的“使用繁花有图编辑”入口。程序已驻留时打开独立预览，不替换已有编辑窗口。
+托盘的“打开图片 / PDF”同时接受图片与 PDF。安装程序默认不添加右键菜单，可在设置中启用 PDF 的“使用繁花有图编辑”入口。程序已驻留时打开独立预览，不替换已有编辑窗口。
 
 页栏支持上一页、下一页和跳转。每页独立保留标注、水印、历史和保存状态；关闭预览会丢弃未保存编辑。OCR、翻译、复制和 LocalSend 作用于当前页。翻页清空旧识别结果，识别面板开启时自动处理最新页面。
 
@@ -32,21 +32,3 @@
 | 输出物理尺寸 | 每边不超过 14400 PDF 点（200 英寸） |
 | 色彩与特殊格式 | 使用 PDF.js 渲染和颜色转换；XFA 交互、脚本不启用 |
 | 保存状态 | 仅标记实际成功导出的页；单页图片不会把其他页标为已保存 |
-
-## 验证入口
-
-```powershell
-npm run test:pdf:service
-npm run test:pdf:renderer
-npm run build
-npm run test:pdf
-node scripts/verify-pdf-ui.cjs "release/1.8.0/win-unpacked/繁花有图.exe"
-node scripts/verify-windows-integration.cjs "release/1.8.0/win-unpacked/繁花有图.exe"
-node scripts/verify-pdf-assets.cjs
-```
-
-服务验证实际生成及重新读取 PDF，覆盖输入边界、隔离、取消、写入失败和旧文件保留。渲染验证使用真实 Electron，本地生成中文、标准字体、CMYK、旋转/裁剪、大页及损坏/加密样例，检查离线资源与取消。界面验证逐页编辑、OCR 最新页队列、两种导出范围、图片转 PDF，并重新打开导出文件比对像素。
-
-`verify-pdf-assets.cjs` 默认使用当前版本的打包 EXE，逐项核对 ASAR 资源与源资源，再实际打开中文 PDF，验证从 ASAR 读取字体和 CMap；`--hash-only` 仅核对资源，不启动窗口。
-
-这些测试产物位于忽略的 `artifacts/` 目录，不作为用户文档交付。实际执行结果见 [验证记录](VALIDATION.md)。

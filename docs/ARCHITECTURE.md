@@ -2,9 +2,9 @@
 
 ## 桌面交互
 
-1.8.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，译文同步覆盖原图识别区域；保存格式和水印使用就地弹窗，复制和共享使用紧凑下拉菜单。图片支持 Windows 资源管理器入口和画布内部的右键菜单。
+正式版本 0.26.1 采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，译文同步覆盖原图识别区域；保存格式和水印使用就地弹窗，复制和共享使用紧凑下拉菜单。图片支持 Windows 资源管理器入口和画布内部的右键菜单。
 
-内部路由仅有 `settings`、`capture`、`preview`，删除 Dashboard 组件和 IPC。常规启动不创建设置窗口；托盘菜单、双击托盘、重复启动或编辑器齿轮按需创建／聚焦同一个设置窗口。
+内部路由仅有 `settings`、`capture`、`preview`。常规启动不创建设置窗口；托盘菜单、双击托盘、重复启动或编辑器齿轮按需创建／聚焦同一个设置窗口。
 
 ## 进程职责
 
@@ -110,7 +110,7 @@ pixelWidth  = right - left
 pixelHeight = bottom - top
 ```
 
-端点取整确保覆盖整个选区。尺寸提示与浏览器演示裁剪遵循同一规则，避免高 DPI 下提示值与导出尺寸相差一像素。
+端点取整确保覆盖整个选区。尺寸提示与实际截图裁剪遵循同一规则，避免高 DPI 下提示值与导出尺寸相差一像素。
 
 编辑画布把鼠标在 CSS 画布中的相对位置乘以自然图像尺寸，得到原图坐标。缩放只影响显示和选择框线宽，导出始终按原图尺寸绘制。
 
@@ -184,9 +184,9 @@ Windows 路径通过隐藏 PowerShell 进程调用 WinRT。超过系统 OCR 尺�
 
 ## 保存格式
 
-`SaveExportDialog.vue` 提供 PNG、JPEG、WebP、BMP；JPEG、WebP 可选 10%～100% 质量。PNG 和 WebP 保留透明度，JPEG 和 BMP 在场景绘制完成后把透明区域合成到白底。
+`SaveExportDialog.vue` 提供 PNG、JPEG、WebP、BMP、PDF；JPEG、WebP 可选 10%～100% 质量。PNG 和 WebP 保留透明度，JPEG 和 BMP 在场景绘制完成后把透明区域合成到白底。PDF 使用前述分页合成保存流程。
 
-渲染进程使用 Canvas 编码 PNG、JPEG、WebP。BMP 通过 PNG 中间数据传到主进程后编码为 24 位、按行补齐的位图；浏览器演示使用 `src/editor/export.ts` 编码。主进程校验 MIME、文件头、尺寸及数据长度；PNG 重新编码，JPEG 保留已选质量的编码结果。由于 Electron 原生图片解码能力不覆盖 WebP，WebP 使用专门的容器与尺寸检查。
+渲染进程使用 Canvas 编码 PNG、JPEG、WebP。BMP 通过 PNG 中间数据传到主进程后编码为 24 位、按行补齐的位图。主进程校验 MIME、文件头、尺寸及数据长度；PNG 重新编码，JPEG 保留已选质量的编码结果。由于 Electron 原生图片解码能力不覆盖 WebP，WebP 使用专门的容器与尺寸检查。
 
 系统保存对话框按选定格式设置筛选器。若用户输入不匹配的扩展名，主进程拒绝并提示重新保存，不擅自改写已确认路径。取消对话框不标记为已保存。复制与共享和文件保存共用场景合成逻辑，包含标注和水印，不包含选择控件、OCR 虚拟框及译文。
 
@@ -194,11 +194,11 @@ Windows 路径通过隐藏 PowerShell 进程调用 WinRT。超过系统 OCR 尺�
 
 ## LocalSend 交接
 
-`localsend:share` 仅接受预览窗口提交的合成 PNG，不接受渲染进程提供磁盘路径或程序路径。服务从记住的位置、正在运行的进程、注册表和常见安装目录查找 LocalSend，失败后使用系统文件选择器选择主程序；检查绝对路径、文件名与 PE 文件头。选择结果可保存到应用用户数据目录的 `localsend.json`，无效旧配置不会阻止重新选择。
+`localsend:share` 仅接受预览窗口提交的合成 PNG，不接受渲染进程提供磁盘路径或程序路径。服务优先使用设置中指定的位置，否则从正在运行的进程、注册表和常见安装目录查找 LocalSend。未找到时提示到“设置 → 共享”选择主程序，共享流程不弹出路径选择器。设置专用 IPC 检查绝对路径、文件名与 PE 文件头，并原子保存至用户数据目录的 `localsend.json`；无效配置可重新选择或恢复自动查找。
 
 图片写入系统临时目录下 `fanhua-localsend` 的唯一命名 PNG，随后以 `spawn(executable, [imagePath], { shell: false })` 调用 LocalSend。不拼接 shell 命令、不实现私有网络接口，也不替用户选择接收设备。已有实例由 LocalSend 自身接收路径并唤醒。成功反馈仅表示程序交接完成，不表示远端收到图片。
 
-共享准备全局互斥，防止多个窗口同时弹出程序选择器。选择器取消，或程序选择结束时来源窗口已经关闭，不继续启动；启动失败清理当次文件。成功交接文件保留供 LocalSend 延后读取，关闭本工具不立即删除；初始化与再次分享时仅删除专用目录内符合本工具命名规则、非链接且超过 7 天的文件。其他文件不被清理。实际调用依据见 [LocalSend 说明](LOCALSEND.md)。
+共享准备全局互斥，防止多个窗口同时发起交接。来源窗口已关闭时不继续启动，启动失败清理当次文件。成功交接文件保留供 LocalSend 延后读取，关闭本工具不立即删除；初始化与再次分享时仅删除专用目录内符合本工具命名规则、非链接且超过 7 天的文件。其他文件不被清理。实际调用依据见 [LocalSend 说明](LOCALSEND.md)。
 
 ## 水印与持久化
 
@@ -206,7 +206,7 @@ Windows 路径通过隐藏 PowerShell 进程调用 WinRT。超过系统 OCR 尺�
 
 `src/watermark/layout.ts` 使用旋转后的包围盒定位边角水印，过大时等比例缩小以适应图片，保留边距并避免贴边裁断。全图平铺交错排列，自动限制到最多 1600 个实例，避免大图与过小间距使界面卡住。`render.ts` 维护最多 3 张已解码图片的缓存，合并并行加载请求，失败后允许重试；绘制保存并恢复 Canvas 状态、限制透明度并裁剪在原图范围内。
 
-原生图片水印导入支持 PNG/JPEG，源文件最多 16 MB、1600 万像素，最长边超过 2048 时等比例缩小，统一转 PNG 并保留透明度。转换后最多 8 MB。浏览器演示使用图片解码和 Canvas 完成相同的缩放与 PNG 转换。
+原生图片水印导入支持 PNG/JPEG，源文件最多 16 MB、1600 万像素，最长边超过 2048 时等比例缩小，统一转 PNG 并保留透明度。转换后最多 8 MB。
 
 桌面存档位于 `app.getPath('userData')/watermarks.json`，保存版本、ID、名称、完整配置与更新时间。`createPresetStore` 把修改操作排入同一 Promise 队列，避免多个预览窗口同时保存造成覆盖；读取等待前面的修改完成。每次更新先写同目录的唯一临时文件，再重命名替换目标文件，并清理残留临时文件。
 
@@ -218,23 +218,18 @@ Windows 路径通过隐藏 PowerShell 进程调用 WinRT。超过系统 OCR 尺�
 
 主进程按窗口身份和视图类型注册白名单操作，并只接受主框架发起的调用。选区须为有限数值并落在屏幕范围内；图像、格式、质量、字体刷新参数、识别语言、水印字段与存档 ID 都在主进程再次校验。OCR、导出与水印导入分别使用对应的大小和类型限制，预加载桥不接受任意磁盘路径。
 
-Vue 响应式对象不能直接传入 Electron 的隔离桥。截图确认前显式复制 `x/y/width/height` 为普通对象，避免自动识别窗口产生的 Proxy 无法序列化。原生端到端测试覆盖单击窗口这条路径。
+Vue 响应式对象不能直接传入 Electron 的隔离桥。截图确认前显式复制 `x/y/width/height` 为普通对象，避免自动识别窗口产生的 Proxy 无法序列化。
 
 打开图片的路径来自系统文件对话框或显式 `--edit-image` 参数，保存路径来自系统保存对话框；水印存档只能访问应用固定的用户数据文件。图片和文字复制由主进程写入剪贴板。窗口导航、新窗口创建和 WebView 挂接被拒绝。OCR 和翻译仍在本机运行；用户主动共享时由 LocalSend 承接后续设备选择和传输。
 
-## 开发与验证
+## 开发与构建
 
-Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。当前版本 1.8.0，仅发布 Windows x64 程序目录与 NSIS 安装包，尚未配置代码签名。`package.json` 限制 `os=win32`，开发、启动、构建与打包前检查 Windows x64；命令显式固定 Windows x64，`beforePack` 再校验实际目标以拒绝其他平台或架构。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
+Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。`dev:web` 用于浏览器端界面开发，不提供桌面集成能力。
 
-- 工作区既有 `tests/` 删除保持不变，历史单元及端到端记录参见 `docs/VALIDATION.md`，本轮使用下列独立脚本。桌面测试使用隔离用户数据目录，避免与正在运行的旧版本共用单实例锁或水印存档。
-- `scripts/verify-windows-target.cjs`：检查 Windows x64 构建约束与其他平台、架构的拒绝路径。
-- `scripts/verify-windows-integration.cjs`：图片解码与输入限制、安装宏、首启及已有实例图片编辑；支持传入打包 EXE。
-- `scripts/verify-context-menu.cjs`：真实 Electron 画布右键编辑、标注选择与删除、历史、菜单定位与焦点；支持传入打包 EXE。
-- `scripts/verify-pdf-service.cjs`、`verify-pdf-renderer.cjs`、`verify-pdf-ui.cjs`：PDF 保存生命周期、离线渲染与边界、逐页编辑和导出回开像素；`verify-pdf-assets.cjs` 核验最终 ASAR 资源及真实中文 PDF 显示。
-- `scripts/verify-translation-service.cjs`、`verify-translation-inference.cjs`：翻译输入与生命周期回归，以及禁止网络调用后的真实模型推理、取消和异常恢复。
-- `scripts/verify-translation.cjs`：真实 Electron OCR 到翻译全流程；传入 EXE 路径可复验打包程序，包含翻译中截图、终止任务子进程后恢复、窗口归属及导出隔离。
-- `scripts/verify-image-clipboard.cjs`、`verify-localsend.cjs`、`verify-sharing-ui.cjs`：真实图片剪贴板字节／像素、LocalSend 交接与临时文件生命周期、分享菜单／压缩参数／窄窗布局与失败恢复。分享界面脚本支持传入打包 EXE 路径。
+正式版本 0.26.1 仅发布 Windows x64 程序目录与 NSIS 安装包，输出至 `release/0.26.1/`。`package.json` 限制 `os=win32`，开发、启动、构建与打包前检查 Windows x64；命令显式固定目标，`beforePack` 再校验实际平台和架构。构建复用项目已安装的 `node_modules/electron/dist` 运行库，尚未配置代码签名。
 
-浏览器演示位于 `src/demo.ts`，不参与真实 Electron 屏幕捕获。测试产物、构建产物和依赖目录通过 `.gitignore` 排除；源码与文档统一 UTF-8，提交说明使用中文。
+开发与构建入口先执行 `pdf:prepare`，把固定依赖的 PDF.js worker、CMap、字体、WASM 与许可复制到前端资源中。`models:prepare` 下载固定版本翻译资源，`models:check` 仅做本地完整性校验；`pack` 和 `dist` 在打包前自动检查模型。
 
-当前不支持一次拖动跨多块显示器连续框选，跨屏窗口只截取所在遮罩对应的可见部分；不提供 macOS、Linux 或 Windows ARM64 发行版。中英以外翻译、图层项目文件、自动保存和截图历史均未实现。架构中的能力描述不替代真实系统与安装包验证。
+OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。模型来源、固定 revision 和许可证随资源保留。源码与文档统一 UTF-8。
+
+当前不支持一次拖动跨多块显示器连续框选，跨屏窗口只截取所在遮罩对应的可见部分；不提供 macOS、Linux 或 Windows ARM64 发行版。中英以外翻译、可编辑图层项目文件、自动保存和截图历史均不在当前范围。
