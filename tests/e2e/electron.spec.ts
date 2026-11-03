@@ -1,4 +1,4 @@
-import { test, expect, _electron as electron, chromium, type ElectronApplication } from '@playwright/test'
+import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test'
 import electronPath from 'electron'
 import path from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -9,7 +9,7 @@ function launchOptions(showWindow = true) {
   delete env.ELECTRON_RUN_AS_NODE
   delete env.VITE_DEV_SERVER_URL
   const packaged = process.env.FANHUA_PACKAGED_EXE
-  return { executablePath: packaged || electronPath as unknown as string, args: [...(packaged ? [] : ['.']), ...(showWindow ? ['--show-window'] : [])], env, timeout: 30000 }
+  return { executablePath: packaged || electronPath as unknown as string, args: [...(packaged ? [] : ['.']), `--user-data-dir=${path.resolve('artifacts/electron-test-profile')}`, ...(showWindow ? ['--show-window'] : [])], env, timeout: 30000 }
 }
 
 async function findWindow(app: ElectronApplication, view: string) {
@@ -39,7 +39,6 @@ test('真实桌面：原生窗口识别、框选、预览固定、导出、取�
   const app = await electron.launch(launchOptions())
   const errors: string[] = []
   app.on('window', page => page.on('pageerror', error => errors.push(error.message)))
-  let fixtureBrowser: Awaited<ReturnType<typeof chromium.launch>> | undefined
   try {
     const dashboard = await findWindow(app, 'dashboard')
     await expect(dashboard.getByRole('button', { name: /开始截图/ })).toBeVisible()
@@ -48,10 +47,15 @@ test('真实桌面：原生窗口识别、框选、预览固定、导出、取�
     expect(typeof state.shortcutRegistered).toBe('boolean')
     await mkdir('artifacts', { recursive: true })
     await dashboard.screenshot({ path: 'artifacts/electron-dashboard.png' })
-    fixtureBrowser = await chromium.launch({ channel: 'msedge', headless: false, args: ['--window-size=1024,768', '--window-position=30,30'] })
-    const fixture = await fixtureBrowser.newPage()
-    await fixture.setContent('<html lang="zh-CN"><head><title>Fanhua Capture Fixture</title></head><body style="margin:0;background:#eee8f8;font:36px sans-serif;color:#7860d2"><div style="padding:80px">繁花有图 · 截图测试窗口<br><span style="font-size:20px">原生窗口识别与原像素裁剪</span></div></body></html>')
-    await fixture.bringToFront()
+    // A dedicated native fixture is temporarily topmost, so another app taking
+    // foreground focus cannot occlude the known pixels during capture.
+    const fixtureId = await app.evaluate(async ({ BrowserWindow }) => {
+      const fixture = new BrowserWindow({ width: 1024, height: 768, x: 30, y: 30, alwaysOnTop: true, webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false } })
+      fixture.setMenu(null)
+      await fixture.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent('<html lang="zh-CN"><head><title>Fanhua Capture Fixture</title></head><body style="margin:0;background:#eee8f8;font:36px sans-serif;color:#7860d2"><div style="padding:80px">繁花有图 · 截图测试窗口<br><span style="font-size:20px">原生窗口识别与原像素裁剪</span></div></body></html>'))
+      fixture.show(); fixture.focus()
+      return fixture.id
+    })
     await dashboard.evaluate(() => window.fanhua!.startCapture())
     const capture = await findWindow(app, 'capture')
     await expect(capture.getByTestId('capture-stage')).toBeVisible()
@@ -68,6 +72,7 @@ test('真实桌面：原生窗口识别、框选、预览固定、导出、取�
     const previewPromise = app.waitForEvent('window', { timeout: 10000 })
     await capture.mouse.click(region.x + region.width / 2, region.y + region.height / 2)
     const preview = await previewPromise
+    await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)!.setAlwaysOnTop(false), fixtureId)
     await expect(preview.getByTestId('editor-canvas')).toBeVisible()
     const imageSize = await preview.getByTestId('editor-canvas').evaluate((el: HTMLCanvasElement) => [el.width, el.height])
     expect(imageSize[0]).toBe(Math.ceil((region.x + region.width) * context.pixelWidth / context.width) - Math.floor(region.x * context.pixelWidth / context.width))
@@ -135,12 +140,12 @@ test('真实桌面：原生窗口识别、框选、预览固定、导出、取�
     expect(recovered).not.toBe(cancelWindow)
     await expect(recovered.locator('.screen-image')).toBeVisible()
     await recovered.keyboard.press('Escape')
+    await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)!.destroy(), fixtureId)
     await dashboard.getByRole('button', { name: '隐藏到系统托盘' }).click()
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every(win => !win.isVisible()))).toBe(true)
-    expect(await dashboard.evaluate(() => window.fanhua!.getAppState())).toMatchObject({ version: '1.1.0' })
+    expect(await dashboard.evaluate(() => window.fanhua!.getAppState())).toMatchObject({ version: '1.2.0' })
     expect(errors).toEqual([])
   } finally {
-    await fixtureBrowser?.close()
     await app.close()
   }
 })
@@ -174,16 +179,37 @@ test('离线中英文识别、四种保存格式与水印存档', async () => {
     expect(fonts).toContain('Arial')
     const capabilities = await preview.evaluate(() => window.fanhua!.getOcrCapabilities())
     expect(capabilities.available).toBe(true)
+    const original = await preview.getByTestId('editor-canvas').evaluate((el: HTMLCanvasElement) => el.toDataURL())
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('view=preview'))!.setSize(420, 260))
     await preview.getByRole('button', { name: '识别文字', exact: true }).click()
-    await expect(preview.getByRole('textbox', { name: '识别结果' })).toHaveValue(/FANHUA/, { timeout: 90000 })
-    const recognized = await preview.getByRole('textbox', { name: '识别结果' }).inputValue()
+    await expect(preview.getByTestId('ocr-sidebar')).toBeVisible()
+    await expect(preview.getByRole('dialog')).toHaveCount(0)
+    await expect(preview.getByTestId('ocr-paragraph-list')).toContainText('FANHUA', { timeout: 90000 })
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('view=preview'))!.getSize()[0])).toBeGreaterThanOrEqual(720)
+    const recognized = (await preview.locator('.paragraph-text').allTextContents()).join('\n\n')
     expect(recognized.replace(/\s/g, '')).toContain('繁花有图')
     expect(recognized).toContain('2026')
+    const regions = preview.getByTestId('ocr-region')
+    expect(await regions.count()).toBeGreaterThan(0)
+    const first = (await regions.first().boundingBox())!
+    await preview.mouse.click(first.x + first.width / 2, first.y + first.height / 2)
+    await expect(preview.getByRole('textbox', { name: '编辑第 1 段文字' })).toBeVisible()
+    await expect(regions.first()).toHaveClass(/active/)
+    expect(await preview.getByTestId('editor-canvas').evaluate((el: HTMLCanvasElement) => el.toDataURL())).toBe(original)
     await expect(preview.getByRole('button', { name: '翻译', exact: true })).toBeDisabled()
-    await preview.getByRole('button', { name: '复制文字', exact: true }).click()
+    await preview.getByRole('button', { name: '复制全部文字', exact: true }).click()
     expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe(recognized)
+    await preview.getByRole('button', { name: '复制图片', exact: true }).click()
+    await expect(preview.getByText('已复制图片', { exact: true })).toBeVisible()
+    expect(await app.evaluate(async ({ clipboard, nativeImage }, png) => {
+      const entry = (await clipboard.read()).find(item => item.types.includes('image/png'))!
+      const image = nativeImage.createFromBuffer(Buffer.from(await (await entry.getType('image/png')).arrayBuffer()))
+      return image.toBitmap().equals(nativeImage.createFromBuffer(Buffer.from(png.split(',')[1]!, 'base64')).toBitmap())
+    }, original)).toBe(true)
+    await preview.getByRole('button', { name: '进入编辑模式', exact: true }).click()
+    expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('view=preview'))!.getSize()[0])).toBeGreaterThanOrEqual(1040)
+    await preview.getByRole('button', { name: '进入编辑模式', exact: true }).click()
     await preview.screenshot({ path: 'artifacts/ocr-result.png' })
-    await preview.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click()
     // Force the bundled engine too: validates unpacked workers and language paths in the installation build.
     const offline = await app.evaluate(async ({ app }, png) => {
       const localRequire = process.getBuiltinModule('module').createRequire(app.getAppPath() + '/package.json')
@@ -194,6 +220,8 @@ test('离线中英文识别、四种保存格式与水印存档', async () => {
     }, dataUrl)
     expect(offline.text.replace(/\s/g, '')).toContain('文字识别')
     expect(offline.text).toContain('FANHUA')
+    expect(offline.paragraphs.length).toBeGreaterThan(0)
+    expect(offline.paragraphs.flatMap((item: { lines: unknown[] }) => item.lines)).toHaveLength(offline.lines.length)
     for (const format of ['png', 'jpeg', 'webp', 'bmp'] as ImageFormat[]) {
       const extension = format === 'jpeg' ? 'jpg' : format
       const savePath = path.resolve(`artifacts/native-format.${extension}`)
@@ -205,10 +233,13 @@ test('离线中英文识别、四种保存格式与水印存档', async () => {
       await expect(preview.getByRole('dialog')).toHaveCount(0)
       const file = await readFile(savePath)
       if (format === 'png') expect(file.subarray(1, 4).toString()).toBe('PNG')
+      if (format === 'png') expect(await app.evaluate(({ nativeImage }, data) => nativeImage.createFromBuffer(Buffer.from(data.encoded, 'base64')).toBitmap().equals(nativeImage.createFromBuffer(Buffer.from(data.source.split(',')[1]!, 'base64')).toBitmap()), { encoded: file.toString('base64'), source: original })).toBe(true)
       if (format === 'jpeg') expect(Array.from(file.subarray(0, 3))).toEqual([255, 216, 255])
       if (format === 'webp') expect(file.subarray(8, 12).toString()).toBe('WEBP')
       if (format === 'bmp') expect(file.subarray(0, 2).toString()).toBe('BM')
     }
+    await preview.getByRole('button', { name: '关闭文字识别', exact: true }).click()
+    await expect(preview.getByTestId('ocr-regions')).toHaveCount(0)
     const watermark = await preview.evaluate(() => window.fanhua!.chooseWatermarkImage())
     expect(watermark?.width).toBe(1000)
     const saved = await preview.evaluate(async image => window.fanhua!.saveWatermarkPreset({ name: '自动验证水印', config: {

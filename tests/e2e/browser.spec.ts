@@ -1,12 +1,13 @@
 import { test, expect, type Page } from '@playwright/test'
 import { mkdir, readFile } from 'node:fs/promises'
+import type { DesktopAPI } from '../../src/shared'
 
 async function clickImage(page: Page, x: number, y: number) {
   const box = (await page.getByTestId('editor-canvas').boundingBox())!
   await page.mouse.click(box.x + box.width * x, box.y + box.height * y)
 }
 
-test('紧凑预览中保存、识别和水印弹窗的操作始终可达', async ({ page }) => {
+test('紧凑预览中保存、水印和非模态识别面板的操作始终可达', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 420, height: 260 })
   await page.goto('/?view=preview')
@@ -15,14 +16,230 @@ test('紧凑预览中保存、识别和水印弹窗的操作始终可达', async
   await expect(page.getByRole('button', { name: '确认保存', exact: true })).toBeInViewport({ ratio: 1 })
   await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click()
   await page.getByRole('button', { name: '识别文字', exact: true }).click()
-  await expect(page.getByRole('button', { name: '复制文字', exact: true })).toBeInViewport({ ratio: 1 })
+  await expect(page.getByTestId('ocr-sidebar')).toBeVisible()
+  await expect(page.getByRole('button', { name: '复制全部文字', exact: true })).toBeInViewport({ ratio: 1 })
+  await expect(page.getByRole('dialog')).toHaveCount(0)
   await mkdir('artifacts', { recursive: true })
   await page.screenshot({ path: 'artifacts/compact-ocr.png' })
-  await page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true }).click()
+  await page.getByRole('button', { name: '关闭文字识别', exact: true }).click()
   await page.getByRole('button', { name: '水印设置', exact: true }).click()
   await expect(page.getByRole('button', { name: '完成水印设置', exact: true })).toBeInViewport({ ratio: 1 })
   await page.screenshot({ path: 'artifacts/compact-watermark.png' })
   await page.getByRole('button', { name: '完成水印设置', exact: true }).click()
+})
+
+async function mockDesktopImage(page: Page) {
+  await page.addInitScript(() => {
+    const fixture = document.createElement('canvas'); fixture.width = 1000; fixture.height = 1200
+    const context = fixture.getContext('2d')!
+    context.fillStyle = '#ffffff'; context.fillRect(0, 0, fixture.width, fixture.height)
+    context.fillStyle = '#222222'; context.font = '24px Arial'
+    const paragraphs = Array.from({ length: 12 }, (_, index) => {
+      const y = 48 + index * 88
+      const lines = [
+        { text: `Paragraph ${index + 1}: first line`, bounds: { x: 60, y, width: 560, height: 24 } },
+        { text: `Paragraph ${index + 1}: second line`, bounds: { x: 60, y: y + 28, width: 560, height: 24 } },
+      ]
+      for (const line of lines) context.fillText(line.text, line.bounds.x, line.bounds.y + 20)
+      return { id: `p${index + 1}`, text: lines.map(line => line.text).join('\n'), bounds: { x: 60, y, width: 560, height: 52 }, lines }
+    })
+    const state = { ocrCalls: 0, copiedText: '', copiedImage: '', savedImage: '' }
+    const dataUrl = fixture.toDataURL()
+    Object.assign(window, { __ocrTestState: state })
+    window.fanhua = {
+      getPreview: async () => ({ id: 'fixture', dataUrl, width: 1000, height: 1200, createdAt: '2026-11-03T12:00:00Z' }),
+      getFonts: async () => ['Arial', 'Microsoft YaHei UI'],
+      setPreviewLayout: async () => {}, setEditing: async () => {},
+      getOcrCapabilities: async () => ({ available: true, languages: [{ tag: 'en-US', name: '英语' }] }),
+      recognizeText: async () => { state.ocrCalls++; return { text: paragraphs.map(item => item.text).join('\n\n'), paragraphs: structuredClone(paragraphs), lines: paragraphs.flatMap(item => item.lines), language: 'en-US', width: 1000, height: 1200 } },
+      copyText: async (text: string) => { state.copiedText = text },
+      copyImage: async (png: string) => { state.copiedImage = png },
+      saveImage: async (png: string) => { state.savedImage = png; return { canceled: false, filePath: 'fixture.png' } },
+      setPinned: async (value: boolean) => value,
+    } as unknown as DesktopAPI
+  })
+}
+
+async function dragImage(page: Page, from: [number, number], to: [number, number]) {
+  const bounds = (await page.getByTestId('editor-canvas').boundingBox())!
+  await page.mouse.move(bounds.x + bounds.width * from[0], bounds.y + bounds.height * from[1])
+  await page.mouse.down()
+  await page.mouse.move(bounds.x + bounds.width * to[0], bounds.y + bounds.height * to[1], { steps: 8 })
+  await page.mouse.up()
+}
+
+test('OCR 段落与图片双向定位、虚拟框随缩放且不进入保存与复制', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await mockDesktopImage(page)
+  await page.goto('/?view=preview')
+  const canvas = page.getByTestId('editor-canvas')
+  await expect(canvas).toBeVisible()
+  await page.getByRole('button', { name: '复制图片', exact: true }).click()
+  await expect.poll(() => page.evaluate('window.__ocrTestState.copiedImage.length')).toBeGreaterThan(100)
+  const original = await page.evaluate('window.__ocrTestState.copiedImage')
+  const pixels = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL())
+  await page.getByRole('button', { name: '识别文字', exact: true }).click()
+  const sidebar = page.getByTestId('ocr-sidebar')
+  await expect(sidebar).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(sidebar.getByRole('listitem')).toHaveCount(12)
+  await expect(page.getByTestId('ocr-region')).toHaveCount(12)
+  await expect(sidebar.getByRole('button', { name: '翻译', exact: true })).toBeDisabled()
+  // Both recognized lines stay in the same paragraph, rather than becoming two items.
+  await expect(sidebar.getByRole('listitem').first()).toContainText('Paragraph 1: first line\nParagraph 1: second line')
+  const last = page.locator('.ocr-region[data-paragraph-id="p12"]')
+  await clickImage(page, .2, (48 + 11 * 88 + 26) / 1200)
+  await expect(last).toHaveClass(/active/)
+  await expect(sidebar.getByRole('textbox', { name: '编辑第 12 段文字' })).toBeInViewport({ ratio: 1 })
+  await expect.poll(() => page.getByTestId('ocr-paragraph-list').evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+  // Clicking the same region again must reveal it even if selectedId did not change.
+  await page.getByTestId('ocr-paragraph-list').evaluate(element => { element.scrollTop = 0 })
+  await clickImage(page, .2, (48 + 11 * 88 + 26) / 1200)
+  await expect(sidebar.getByRole('textbox', { name: '编辑第 12 段文字' })).toBeInViewport({ ratio: 1 })
+  await sidebar.getByRole('textbox', { name: '编辑第 12 段文字' }).fill('修正后的第十二段\n第二行仍属于本段')
+  await sidebar.getByRole('button', { name: '复制第 12 段文字', exact: true }).click()
+  await expect.poll(() => page.evaluate('window.__ocrTestState.copiedText')).toBe('修正后的第十二段\n第二行仍属于本段')
+  await sidebar.getByRole('button', { name: '复制全部文字', exact: true }).click()
+  await expect.poll(() => page.evaluate('window.__ocrTestState.copiedText')).toContain('修正后的第十二段')
+  await sidebar.getByRole('button', { name: '定位第 1 段文字', exact: true }).click()
+  const first = page.locator('.ocr-region[data-paragraph-id="p1"]')
+  await expect(first).toHaveClass(/active/)
+  const beforeZoom = (await first.boundingBox())!
+  const beforeCanvas = (await canvas.boundingBox())!
+  await page.mouse.move(beforeZoom.x + beforeZoom.width / 2, beforeZoom.y + beforeZoom.height / 2)
+  await page.keyboard.down('Control'); await page.mouse.wheel(0, -120); await page.keyboard.up('Control')
+  await expect.poll(async () => (await first.boundingBox())!.width).toBeGreaterThan(beforeZoom.width)
+  const zoomed = (await first.boundingBox())!, zoomedCanvas = (await canvas.boundingBox())!
+  expect(zoomed.width / zoomedCanvas.width).toBeCloseTo(beforeZoom.width / beforeCanvas.width, 4)
+  expect((zoomed.y - zoomedCanvas.y) / zoomedCanvas.height).toBeCloseTo(48 / 1200, 4)
+  expect(await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL()) === pixels).toBe(true)
+  await page.getByRole('button', { name: '复制图片', exact: true }).click()
+  expect(await page.evaluate('window.__ocrTestState.copiedImage') === original).toBe(true)
+  await page.getByRole('button', { name: '保存图片', exact: true }).click()
+  await page.getByRole('button', { name: '确认保存', exact: true }).click()
+  await expect.poll(async () => await page.evaluate('window.__ocrTestState.savedImage') === original).toBe(true)
+  await page.getByRole('button', { name: '关闭文字识别', exact: true }).click()
+  await expect(page.getByTestId('ocr-regions')).toHaveCount(0)
+  await page.getByRole('button', { name: '识别文字', exact: true }).click()
+  await expect(page.getByTestId('ocr-region')).toHaveCount(12)
+  expect(await page.evaluate('window.__ocrTestState.ocrCalls')).toBe(1)
+  await sidebar.getByRole('button', { name: '定位第 12 段文字', exact: true }).click()
+  await expect(sidebar.getByRole('textbox', { name: '编辑第 12 段文字' })).toHaveValue('修正后的第十二段\n第二行仍属于本段')
+  await page.getByRole('button', { name: '适应窗口', exact: true }).click()
+  await page.getByRole('button', { name: '进入编辑模式', exact: true }).click()
+  await page.getByRole('button', { name: '箭头工具', exact: true }).click()
+  await dragImage(page, [.73, .1], [.90, .2])
+  await expect(page.getByRole('button', { name: '选择图层 箭头标注', exact: true })).toBeVisible()
+  await expect(sidebar.getByText('图片已修改，点击识别可更新段落位置。')).toBeVisible()
+  await expect(sidebar.getByRole('textbox', { name: '编辑第 12 段文字' })).toBeInViewport({ ratio: 1 })
+  await sidebar.getByRole('textbox', { name: '编辑第 12 段文字' }).focus()
+  await page.keyboard.press('Delete')
+  await expect(page.getByRole('button', { name: '选择图层 箭头标注', exact: true })).toBeVisible()
+  await mkdir('artifacts', { recursive: true })
+  await expect(page.locator('.ant-message-notice')).toHaveCount(0)
+  await page.screenshot({ path: 'artifacts/ocr-sidebar.png' })
+  expect(errors).toEqual([])
+})
+
+test('方框圆形边框样式、空心命中、控制点缩放与取消拖动', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await mockDesktopImage(page)
+  await page.goto('/?view=preview')
+  const canvas = page.getByTestId('editor-canvas')
+  await expect(canvas).toBeVisible()
+  await page.getByRole('button', { name: '进入编辑模式', exact: true }).click()
+  await page.getByRole('button', { name: '方框工具', exact: true }).click()
+  // Escape cancels an unfinished pointer gesture without leaving edit mode.
+  let box = (await canvas.boundingBox())!
+  await page.mouse.move(box.x + box.width * .1, box.y + box.height * .1); await page.mouse.down()
+  await page.mouse.move(box.x + box.width * .6, box.y + box.height * .4, { steps: 5 })
+  await page.keyboard.press('Escape'); await page.mouse.up()
+  await expect(page.getByRole('button', { name: '方框工具', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '选择图层 方框标注', exact: true })).toHaveCount(0)
+  await dragImage(page, [.2, .2], [.7, .5])
+  const rectangle = page.getByRole('button', { name: '选择图层 方框标注', exact: true })
+  await expect(rectangle).toBeVisible()
+  await page.getByRole('spinbutton', { name: '边框粗细' }).fill('8')
+  await page.getByRole('spinbutton', { name: '边框粗细' }).press('Tab')
+  await page.getByRole('button', { name: '颜色 #438fe8', exact: true }).click()
+  const bluePixels = () => canvas.evaluate((element: HTMLCanvasElement) => {
+    const pixels = element.getContext('2d')!.getImageData(0, 0, element.width, element.height).data
+    let count = 0, left = Infinity, top = Infinity, right = -1, bottom = -1
+    for (let index = 0; index < pixels.length; index += 4) if (pixels[index] === 67 && pixels[index + 1] === 143 && pixels[index + 2] === 232) {
+      const x = index / 4 % element.width, y = Math.floor(index / 4 / element.width)
+      count++; left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x); bottom = Math.max(bottom, y)
+    }
+    return { count, left, top, width: right - left + 1, height: bottom - top + 1 }
+  })
+  await expect.poll(async () => (await bluePixels()).count).toBeGreaterThan(1000)
+  const solid = await bluePixels()
+  expect(solid.width).toBeGreaterThan(495); expect(solid.width).toBeLessThan(505)
+  await page.locator('.ant-select[aria-label="边框类型"]').click()
+  await page.locator('.ant-select-dropdown:visible').getByTitle('虚线', { exact: true }).click()
+  await expect.poll(async () => (await bluePixels()).count).toBeLessThan(solid.count)
+  await page.locator('.ant-select[aria-label="边框类型"]').click()
+  await page.locator('.ant-select-dropdown:visible').getByTitle('点线', { exact: true }).click()
+  await expect(page.locator('.ant-select[aria-label="边框类型"]')).toContainText('点线')
+  await page.locator('.ant-select[aria-label="边框类型"]').click()
+  await page.locator('.ant-select-dropdown:visible').getByTitle('实线', { exact: true }).click()
+  // A hollow shape must not steal selection from empty space inside it.
+  await page.getByRole('button', { name: '选择工具', exact: true }).click()
+  await clickImage(page, .45, .35)
+  await expect(page.getByRole('button', { name: '删除选中标注', exact: true })).toBeDisabled()
+  await rectangle.click()
+  await dragImage(page, [.7, .5], [.85, .65])
+  await expect.poll(async () => (await bluePixels()).width).toBeGreaterThan(solid.width + 100)
+  const resized = await bluePixels()
+  await dragImage(page, [.35, .2], [.38, .23])
+  await expect.poll(async () => (await bluePixels()).left).toBeGreaterThan(resized.left + 20)
+  const moved = await bluePixels()
+  expect(moved.width).toBe(resized.width)
+  await page.getByRole('button', { name: '删除此标注', exact: true }).click()
+  await expect(rectangle).toHaveCount(0)
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect(rectangle).toBeVisible()
+  await page.getByRole('button', { name: '重做', exact: true }).click()
+  await expect(rectangle).toHaveCount(0)
+  await page.getByRole('button', { name: '圆形工具', exact: true }).click()
+  await page.getByRole('button', { name: '颜色 #438fe8', exact: true }).click()
+  await page.keyboard.down('Shift'); await dragImage(page, [.2, .2], [.6, .35]); await page.keyboard.up('Shift')
+  const circle = page.getByRole('button', { name: '选择图层 圆形标注', exact: true })
+  await expect(circle).toBeVisible()
+  const round = await bluePixels()
+  expect(Math.abs(round.width - round.height)).toBeLessThanOrEqual(2)
+  expect(round.width).toBeGreaterThan(390)
+  await page.getByRole('button', { name: '选择工具', exact: true }).click()
+  await clickImage(page, .4, .2 + 200 / 1200)
+  await expect(page.getByRole('button', { name: '删除选中标注', exact: true })).toBeDisabled()
+  await canvas.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+  await page.getByRole('button', { name: '复制图片', exact: true }).click()
+  await expect.poll(() => page.evaluate('window.__ocrTestState.copiedImage.length')).toBeGreaterThan(100)
+  const edited = await page.evaluate('window.__ocrTestState.copiedImage')
+  // Repeated getImageData calls may move the live canvas to software rendering.
+  // The two rasterizers differ by at most two channel levels at ellipse edges.
+  const pixelComparison = await page.evaluate(async () => {
+    const source = document.querySelector<HTMLCanvasElement>('[data-testid="editor-canvas"]')!
+    const image = new Image(); image.src = (window as unknown as { __ocrTestState: { copiedImage: string } }).__ocrTestState.copiedImage; await image.decode()
+    const copy = document.createElement('canvas'); copy.width = source.width; copy.height = source.height
+    const ctx = copy.getContext('2d')!; ctx.drawImage(image, 0, 0)
+    const a = source.getContext('2d')!.getImageData(0, 0, source.width, source.height).data, b = ctx.getImageData(0, 0, source.width, source.height).data
+    let count = 0, max = 0, left = Infinity, top = Infinity, right = 0, bottom = 0
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) { count++; max = Math.max(max, Math.abs(a[i]! - b[i]!)); const x = Math.floor(i / 4) % source.width, y = Math.floor(i / 4 / source.width); left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x); bottom = Math.max(bottom, y) }
+    return { count, max, left, top, right, bottom }
+  })
+  expect(pixelComparison.max).toBeLessThanOrEqual(2)
+  expect(pixelComparison.count).toBeLessThan(5000)
+  await page.getByRole('button', { name: '保存图片', exact: true }).click()
+  await page.getByRole('button', { name: '确认保存', exact: true }).click()
+  await expect.poll(async () => await page.evaluate('window.__ocrTestState.savedImage') === edited).toBe(true)
+  await mkdir('artifacts', { recursive: true })
+  await expect(page.locator('.ant-message-notice')).toHaveCount(0)
+  await page.screenshot({ path: 'artifacts/shape-tools.png' })
+  expect(errors).toEqual([])
 })
 
 test('工具设置、窗口识别与框选预览', async ({ page }) => {
