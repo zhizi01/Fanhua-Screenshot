@@ -34,6 +34,7 @@ export interface DesktopAPI {
   quitApp(): Promise<void>
   setLaunchAtLogin(enabled: boolean): Promise<boolean>
   getCaptureContext(): Promise<CaptureContext>
+  captureReady(): Promise<void>
   completeCapture(rect: Rect): Promise<void>
   cancelCapture(): Promise<void>
   getPreview(): Promise<Screenshot>
