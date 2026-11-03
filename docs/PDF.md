@@ -40,8 +40,8 @@ npm run test:pdf:service
 npm run test:pdf:renderer
 npm run build
 npm run test:pdf
-node scripts/verify-pdf-ui.cjs "release/1.7.0/win-unpacked/繁花有图.exe"
-node scripts/verify-windows-integration.cjs "release/1.7.0/win-unpacked/繁花有图.exe"
+node scripts/verify-pdf-ui.cjs "release/1.8.0/win-unpacked/繁花有图.exe"
+node scripts/verify-windows-integration.cjs "release/1.8.0/win-unpacked/繁花有图.exe"
 node scripts/verify-pdf-assets.cjs
 ```
 

@@ -2,7 +2,7 @@
 
 ## 桌面交互
 
-1.7.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，译文同步覆盖原图识别区域；保存格式和水印使用就地弹窗，复制和共享使用紧凑下拉菜单。图片支持 Windows 资源管理器入口和画布内部的右键菜单。
+1.8.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，译文同步覆盖原图识别区域；保存格式和水印使用就地弹窗，复制和共享使用紧凑下拉菜单。图片支持 Windows 资源管理器入口和画布内部的右键菜单。
 
 内部路由仅有 `settings`、`capture`、`preview`，删除 Dashboard 组件和 IPC。常规启动不创建设置窗口；托盘菜单、双击托盘、重复启动或编辑器齿轮按需创建／聚焦同一个设置窗口。
 
@@ -19,6 +19,7 @@
 | 预加载桥 | `electron/preload.cjs` | 通过 `contextBridge` 暴露明确的 `window.fanhua` 方法。 |
 | 共享类型 | `src/shared.ts` | 截图上下文、窗口矩形、图片信息和桌面 API 契约。 |
 | 设置视图 | `src/views/SettingsView.vue` | 启动与系统集成、编辑默认值、保存与识别、LocalSend 路径。 |
+| 截图快捷键 | `electron/shortcut.cjs` | 组合校验与规范化、先注册候选的两阶段切换、失败回滚、托盘状态通知。 |
 | 全局偏好 | `electron/settings.cjs`、`context-menu.cjs`、`startup-notification.cjs` | 原子持久化、用户主动注册右键、启动系统通知。 |
 | 截图遮罩 | `src/views/CaptureView.vue` | 窗口命中、悬停高亮、框选、确认和取消。 |
 | 预览编辑 | `src/views/PreviewView.vue`、`src/editor/` | 原图坐标中的标注、箭头端点、矩形／椭圆控制点、缩放锚点、文档历史和导出。 |
@@ -34,6 +35,16 @@
 窗口关闭时删除关联截图数据。设置窗口关闭时销毁，重新打开时从持久化设置恢复；最后一个窗口关闭后，托盘和快捷键仍保留。只有显式退出程序才释放全局快捷键、停止原生服务并退出。
 
 `setPreviewLayout({ editing, ocr })` 统一调整预览窗口最低尺寸。仅编辑为 760 × 500，仅识别为 720 × 500，同时开启为 1040 × 540；实际尺寸受当前显示器工作区限制。关闭侧栏后降低最小尺寸，不强制缩小用户已调整的窗口。图片、编辑属性和 OCR 段落栏位于同一工作区，段落列表独立滚动。
+
+## 自定义截图快捷键
+
+`AppSettings.captureShortcut` 默认为 `Alt+A`，旧配置缺少字段时自动补齐。设置窗口使用修饰键和主键选择器，只在点击应用或恢复默认时提交；预览／截图窗口无权写入。组合在主进程规范化并限制允许的键，显示时将 Super 写为 Win。
+
+快捷键切换与设置保存共用串行事务：先注册新候选而继续保留旧键，候选回调此时不发起截图；写入成功后激活新键并释放旧键。占用／无效组合直接拒绝，磁盘保存失败注销候选并保留旧配置。候选和生效回调均检查当前所有权，避免迟到回调触发截图。应用退出先等待设置队列结算，再释放全部快捷键，防止退出中途重新占用。
+
+托盘截图菜单的 accelerator、状态菜单和 tooltip 都读取实际快捷键服务状态。启动按保存的组合注册，失败仍可使用托盘截图或更换组合；欢迎通知使用该组合及注册结果，不再写死 Alt + A。设置通知预览随已保存组合更新，修改设置不会重复弹启动通知。
+
+调用依据：[Electron globalShortcut](https://www.electronjs.org/docs/latest/api/global-shortcut)、[Accelerator](https://www.electronjs.org/docs/latest/api/accelerator)。
 
 ## 图片右键入口
 
@@ -213,7 +224,7 @@ Vue 响应式对象不能直接传入 Electron 的隔离桥。截图确认前显
 
 ## 开发与验证
 
-Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。当前版本 1.7.0，仅发布 Windows x64 程序目录与 NSIS 安装包，尚未配置代码签名。`package.json` 限制 `os=win32`，开发、启动、构建与打包前检查 Windows x64；命令显式固定 Windows x64，`beforePack` 再校验实际目标以拒绝其他平台或架构。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
+Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。当前版本 1.8.0，仅发布 Windows x64 程序目录与 NSIS 安装包，尚未配置代码签名。`package.json` 限制 `os=win32`，开发、启动、构建与打包前检查 Windows x64；命令显式固定 Windows x64，`beforePack` 再校验实际目标以拒绝其他平台或架构。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
 
 - 工作区既有 `tests/` 删除保持不变，历史单元及端到端记录参见 `docs/VALIDATION.md`，本轮使用下列独立脚本。桌面测试使用隔离用户数据目录，避免与正在运行的旧版本共用单实例锁或水印存档。
 - `scripts/verify-windows-target.cjs`：检查 Windows x64 构建约束与其他平台、架构的拒绝路径。

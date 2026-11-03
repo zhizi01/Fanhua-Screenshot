@@ -1,6 +1,6 @@
 {
   "name": "fanhua-screenshot",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "private": true,
   "os": [
     "win32"
@@ -35,6 +35,8 @@
     "test:pdf:renderer": "node scripts/verify-pdf-renderer.cjs",
     "test:settings": "node scripts/verify-settings-ui.cjs",
     "test:settings:service": "node scripts/verify-settings-service.cjs",
+    "test:shortcut": "node scripts/verify-shortcut-ui.cjs",
+    "test:shortcut:service": "node scripts/verify-shortcut-service.cjs",
     "test:startup-notification": "node scripts/verify-startup-notification.cjs",
     "test:login-item": "node scripts/verify-login-item.cjs",
     "test:context-menu:service": "node scripts/verify-context-menu-service.cjs",

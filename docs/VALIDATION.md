@@ -1,5 +1,24 @@
 # 验证记录
 
+## 1.8.0：自定义截图快捷键
+
+日期：2026-11-04。Windows 11 x64 / Electron 45.2.1，使用隔离的用户数据目录；保留工作区既有 `tests/` 删除，不修改其他应用的快捷键、开机项或注册表。
+
+- `verify-shortcut-service.cjs` 通过：允许组合的规范化、Win 显示名、候选键不触发截图、占用／异常保留旧键、旧回调隔离、同键重试、写盘先于激活、多系统设置逆序回滚、切换提交失败恢复文件、旧配置补默认值、重启恢复、退出清理候选和等待在途写入。
+- `verify-settings-service.cjs` 继续通过，未影响原有右键菜单事务、原子持久化和并发设置逻辑；`verify-startup-notification.cjs` 验证默认文案不变、自定义组合与冲突文案使用当前快捷键，Win 名称正确。
+- 源码和最终打包程序的 `verify-shortcut-ui.cjs` 均通过：实际注册 Ctrl + Alt + F10 并释放 Alt + A，同键重复提交不丢回调，托盘 tooltip／菜单文字／accelerator 更新。使用 Windows SendInput 注入已确认属于测试实例的组合，成功唤起真实截图遮罩；屏幕源由本地生成图替代，没有读取真实桌面像素。
+- 占位 Ctrl + Alt + F11 制造真实注册冲突后，旧键、磁盘设置和占位回调均保留。将隔离目录中的 settings.json 临时替换为空目录制造真实 rename 失败，候选键被释放、旧键及设置保持。测试结束恢复自建文件，不触碰用户数据。
+- 校验无修饰字符键拒绝、预览窗口无权修改快捷键、恢复 Alt + A、应用完整重启后注册保存的组合、普通启动保持托盘，以及通知预览使用当前组合。没有页面错误。通知单元测试使用替身，未在自动回归中弹出系统通知。
+- 原有源码 `verify-settings-ui.cjs` 全部通过：偏好持久化、新旧编辑窗口隔离、截图后直接编辑、崩溃恢复和系统设置失败回滚无回归。480×420 快捷键区域及常规宽度已截图检查，修饰键、主键和应用／恢复按钮可见，无横向溢出。
+- 最后补充原生注销失败的服务回归：回滚会清除 pending 状态，保留旧键可用和候选所有权供退出重试，后续修改明确提示完全退出后重试，不会永远显示“正在保存”。主进程托盘重试异常与退出注销异常均有隔离处理。
+- `npm run dist` 通过：类型检查、Vite、14 个离线翻译模型校验及 Windows x64 NSIS 构建成功。最终 EXE 的当前组合、选项与托盘一致，重启后台驻留，无页面错误。源码及打包界面已检查；UTF-8 严格解码、Git 空白检查及 package/lock 版本一致性通过。
+
+证据：`artifacts/shortcut-service/regression.json`、`shortcut-ui-regression-source.json`、`shortcut-ui-regression-packaged.json`、`shortcut-settings-{source,packaged}.png`、`shortcut-compact-source.png`、`settings-ui-regression-source.json`。未运行安装向导。
+
+安装包：`release/1.8.0/Fanhua-Screenshot-1.8.0-Setup.exe`，341,021,185 字节，未配置代码签名。
+
+SHA-256：`c4125b8d0e2f1813c278517cbee85cd15e03ce2a83a330a3b314347abeabfedf`。
+
 ## 1.7.0：托盘工具、独立设置与启动通知
 
 日期：2026-11-04。Windows 11 x64 / Electron 45.2.1。各界面回归使用独立用户数据目录，未恢复或提交工作区既有 `tests/` 删除；未执行安装向导，未修改真实开机启动项或注册表。
