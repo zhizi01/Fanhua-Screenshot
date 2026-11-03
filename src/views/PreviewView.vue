@@ -10,7 +10,9 @@ import { encodeBmp } from '../editor/export'
 import { defaultWatermark, loadWatermarkImage } from '../watermark/render'
 import SaveExportDialog from '../components/SaveExportDialog.vue'
 import ShareActions from '../components/ShareActions.vue'
+import ImageContextMenu from '../components/ImageContextMenu.vue'
 import OcrSidebar from '../components/OcrSidebar.vue'
+import TranslationOverlay from '../components/TranslationOverlay.vue'
 import { hitOcrParagraph, clipOcrBounds } from '../ocr/regions'
 import WatermarkPanel from '../components/WatermarkPanel.vue'
 import { useParagraphTranslation } from '../services/translation'
@@ -38,6 +40,12 @@ const ocrHasResult = ref(false)
 const ocrSidebar = ref<InstanceType<typeof OcrSidebar>>()
 const translation = useParagraphTranslation(ocrParagraphs, () => screenshot.value?.id)
 const translationState = translation.state
+const hoveredParagraphId = ref<string>()
+const hoveredTranslation = computed(() => {
+  if (!ocrOpen.value || !translationState.value.open || !hoveredParagraphId.value) return ''
+  const paragraph = ocrParagraphs.value.find(item => item.id === hoveredParagraphId.value)
+  return paragraph ? translatedText(paragraph) : ''
+})
 let ocrRequest = 0
 const watermarkOpen = ref(false)
 const watermark = ref<WatermarkConfig>(defaultWatermark())
@@ -48,6 +56,7 @@ const selected = computed(() => layers.value.find(layer => layer.id === selected
 const layerList = computed(() => visualLayers(layers.value).reverse())
 const stage = ref<HTMLElement>()
 const canvas = ref<HTMLCanvasElement>()
+const contextMenu = ref({ open: false, x: 0, y: 0 })
 const textInput = ref<HTMLTextAreaElement>()
 const scale = ref(1)
 const fitMode = ref(true)
@@ -149,6 +158,7 @@ function wheel(event: WheelEvent) {
 }
 function setTool(value: Tool) { cancelDrag(); tool.value = value; selectedId.value = undefined }
 async function toggleEditing() {
+  contextMenu.value.open = false
   cancelDrag()
   editing.value = !editing.value
   selectedId.value = undefined
@@ -158,6 +168,38 @@ async function toggleEditing() {
   await nextTick()
   if (fitMode.value) fit()
   queuePaint()
+}
+function openImageContextMenu(event: MouseEvent) {
+  event.preventDefault()
+  if (!canvas.value || !screenshot.value || loading.value || error.value || saving.value || copying.value || sharing.value || exportOpen.value || watermarkOpen.value) return
+  cancelDrag()
+  const point = imagePoint(event.clientX, event.clientY, canvas.value.getBoundingClientRect(), screenshot.value.width, screenshot.value.height)
+  const measure = textMeasure(canvas.value.getContext('2d')!)
+  selectedId.value = hitTest(layers.value, point, 5 / scale.value, measure)?.id
+  contextMenu.value = { open: true, x: event.clientX, y: event.clientY }
+}
+function closeImageContextMenu(restoreFocus: boolean) {
+  contextMenu.value.open = false
+  if (restoreFocus) canvas.value?.focus({ preventScroll: true })
+}
+async function contextCommand(command: 'edit' | 'finish' | 'copy' | 'save' | 'undo' | 'redo' | 'delete') {
+  if (command === 'edit') {
+    const target = selectedId.value
+    if (!editing.value) await toggleEditing()
+    tool.value = 'select'
+    selectedId.value = target
+    await nextTick()
+    if (selectedText.value) textInput.value?.focus()
+    else canvas.value?.focus({ preventScroll: true })
+  } else if (command === 'finish') { if (editing.value) await toggleEditing() }
+  else if (command === 'copy') await copy()
+  else if (command === 'save') save()
+  else {
+    if (command === 'undo') undo()
+    if (command === 'redo') redo()
+    if (command === 'delete') deleteSelected()
+    canvas.value?.focus({ preventScroll: true })
+  }
 }
 function patchStyle(key: keyof TextStyle, value: string | number) {
   if (key === 'size') value = Math.max(8, Math.min(200, Number(value) || 28))
@@ -282,6 +324,9 @@ function pointerDown(event: PointerEvent) {
   }
 }
 function pointerMove(event: PointerEvent) {
+  if (canvas.value && screenshot.value && ocrOpen.value && translationState.value.open && !drag) {
+    hoveredParagraphId.value = hitOcrParagraph(ocrParagraphs.value, pointerPosition(event))?.id
+  } else hoveredParagraphId.value = undefined
   if (!drag || drag.pointerId !== event.pointerId || !screenshot.value || !canvas.value) return
   const point = pointerPosition(event)
   const dx = point.x - drag.origin.x
@@ -466,6 +511,14 @@ function paragraphStyle(paragraph: OcrParagraph) {
   const bounds = paragraph.bounds
   return { left: `${bounds.x * scale.value}px`, top: `${bounds.y * scale.value}px`, width: `${bounds.width * scale.value}px`, height: `${bounds.height * scale.value}px` }
 }
+function translatedText(paragraph: OcrParagraph) {
+  const result = translationState.value.results[paragraph.id]
+  return translationState.value.open && result?.sourceText === paragraph.text ? result.text : ''
+}
+function paragraphLineHeight(paragraph: OcrParagraph) {
+  const heights = paragraph.lines.map(line => line.bounds.height).filter(height => Number.isFinite(height) && height > 0)
+  return heights.length ? heights.reduce((sum, height) => sum + height, 0) / heights.length : paragraph.bounds.height
+}
 async function togglePin() {
   if (!window.fanhua) { message.info('桌面版支持将图片固定在其他窗口上方'); return }
   try { pinned.value = await window.fanhua.setPinned(!pinned.value) } catch { message.error('固定窗口失败') }
@@ -518,6 +571,7 @@ onMounted(async () => {
     screenshot.value.width = img.naturalWidth; screenshot.value.height = img.naturalHeight
     loading.value = false
     await nextTick()
+    if (screenshot.value.initialEditing) await toggleEditing()
     resizeObserver = new ResizeObserver(() => {
       if (stage.value) viewportSize.value = { width: stage.value.clientWidth, height: stage.value.clientHeight }
       if (fitMode.value) fit()
@@ -543,7 +597,7 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
         <AButton size="small" type="text" :class="{ 'is-pinned': pinned }" :title="pinned ? '取消置顶' : '固定到屏幕前方'" aria-label="固定窗口" :aria-pressed="pinned" @click="togglePin"><template #icon><PinOff v-if="pinned" :size="15" /><Pin v-else :size="15" /></template><span class="action-label">{{ pinned ? '已固定' : '固定' }}</span></AButton>
         <ShareActions :disabled="loading || !!error || saving" :desktop="isDesktop" :copying="copying" :sharing="sharing" @copy="copy" @share="shareViaLocalSend" />
         <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': ocrOpen }" :aria-pressed="ocrOpen" aria-label="识别文字" title="显示或收起文字识别面板" @click="toggleOcr"><template #icon><ScanText :size="15" /></template><span class="action-label">识别文字</span></AButton>
-        <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': ocrOpen && translationState.open }" aria-label="中英翻译" title="在识别段落下显示本地中英译文" @click="showTranslation"><template #icon><Languages :size="15" /></template><span class="action-label">翻译</span></AButton>
+        <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': ocrOpen && translationState.open }" aria-label="中英翻译" title="在图片原文位置和段落列表显示中英译文" @click="showTranslation"><template #icon><Languages :size="15" /></template><span class="action-label">翻译</span></AButton>
         <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': watermark.enabled }" aria-label="水印设置" title="添加文字或图片水印" @click="watermarkOpen = true"><template #icon><Stamp :size="15" /></template><span class="action-label">水印</span></AButton>
         <AButton size="small" type="text" :disabled="loading || !!error" aria-label="进入编辑模式" :title="editing ? '完成编辑' : '编辑图片'" :class="{ 'edit-active': editing }" @click="toggleEditing"><template #icon><Check v-if="editing" :size="15" /><Pencil v-else :size="15" /></template><span class="action-label">{{ editing ? '完成' : '编辑' }}</span></AButton>
         <AButton size="small" type="primary" :loading="saving" :disabled="loading || !!error" aria-label="保存图片" title="选择格式并保存 Ctrl+S" @click="save"><template #icon><Download :size="15" /></template><span class="action-label">保存</span></AButton>
@@ -559,9 +613,12 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
           <div v-if="loading || error" class="load-state"><ImageIcon :size="28" /><h2>{{ error || '正在读取图片…' }}</h2><p v-if="error">请重新截图或打开图片</p></div>
           <div v-else-if="screenshot" class="canvas-surface" :style="surfaceStyle">
           <div class="canvas-wrapper" :style="{ width: `${screenshot.width * scale}px`, height: `${screenshot.height * scale}px` }">
-            <canvas ref="canvas" :width="screenshot.width" :height="screenshot.height" :style="{ width: '100%', height: '100%', cursor: !editing ? 'default' : tool === 'select' ? 'default' : 'crosshair' }" tabindex="0" role="img" aria-label="截图编辑画布" data-testid="editor-canvas" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp" @pointercancel="pointerCancel" @lostpointercapture="pointerCancel" @dblclick="doubleClick"></canvas>
+            <canvas ref="canvas" :width="screenshot.width" :height="screenshot.height" :style="{ width: '100%', height: '100%', cursor: !editing ? 'default' : tool === 'select' ? 'default' : 'crosshair' }" :title="hoveredTranslation" tabindex="0" role="img" aria-label="截图编辑画布" data-testid="editor-canvas" @pointerdown="pointerDown" @pointermove="pointerMove" @pointerleave="hoveredParagraphId = undefined" @pointerup="pointerUp" @pointercancel="pointerCancel" @lostpointercapture="pointerCancel" @dblclick="doubleClick" @contextmenu="openImageContextMenu"></canvas>
             <div v-if="ocrOpen" class="ocr-regions" aria-hidden="true" data-testid="ocr-regions">
-              <div v-for="(paragraph, index) in ocrParagraphs" :key="paragraph.id" class="ocr-region" :class="{ active: selectedParagraphId === paragraph.id }" :style="paragraphStyle(paragraph)" :data-paragraph-id="paragraph.id" data-testid="ocr-region"><span>{{ index + 1 }}</span></div>
+              <div v-for="(paragraph, index) in ocrParagraphs" :key="paragraph.id" class="ocr-region" :class="{ active: selectedParagraphId === paragraph.id, translated: !!translatedText(paragraph) }" :style="paragraphStyle(paragraph)" :data-paragraph-id="paragraph.id" data-testid="ocr-region">
+                <TranslationOverlay v-if="translatedText(paragraph)" :text="translatedText(paragraph)" :source-line-height="paragraphLineHeight(paragraph)" :scale="scale" />
+                <span v-else>{{ index + 1 }}</span>
+              </div>
             </div>
           </div>
           </div>
@@ -615,6 +672,7 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
       <OcrSidebar v-if="ocrOpen" ref="ocrSidebar" :busy="ocrBusy" :error="ocrError" :paragraphs="ocrParagraphs" :selected-id="selectedParagraphId" :languages="ocrCapabilities?.languages || []" :language="ocrLanguage" :available="isDesktop && ocrCapabilities?.available !== false" :has-result="ocrHasResult" :translation="translationState" @close="setOcrOpen(false)" @recognize="recognizeText" @update:language="ocrLanguage = $event" @select="selectParagraph" @update:text="editParagraph" @translation:open="translation.setOpen" @translation:direction="translation.changeDirection" @translate="translation.translate" @translation:cancel="translation.cancel()" @translation:retry="translation.setOpen(true)" />
     </main>
     <footer class="statusbar"><div class="image-status"><span :class="['status-dot', { unsaved: !saved }]"></span><span>{{ saved ? '已保存到本地' : '未保存' }}</span><span v-if="pinned" class="pin-status">已置顶</span><span v-if="editing" class="status-hint">{{ toolHint }}</span></div><div class="zoom-controls" title="Ctrl + 鼠标滚轮缩放图片"><button class="icon-button" aria-label="缩小图片" @click="zoom(scale / 1.2)"><Minus :size="13" /></button><button class="zoom-value" aria-label="原始大小" title="原始大小 100%" @click="zoom(1)">{{ Math.round(scale * 100) }}%<ChevronDown :size="10" /></button><button class="icon-button" aria-label="放大图片" @click="zoom(scale * 1.2)"><Plus :size="13" /></button><i></i><button class="fit-button" :class="{ active: fitMode }" aria-label="适应窗口" title="适应窗口" @click="fit"><Maximize :size="13" /><span>适应</span></button></div></footer>
+    <ImageContextMenu :open="contextMenu.open" :x="contextMenu.x" :y="contextMenu.y" :editing="editing" :has-selection="!!selected" :can-undo="canUndo" :can-redo="canRedo" @close="closeImageContextMenu" @command="contextCommand" />
     <SaveExportDialog v-model:open="exportOpen" :width="screenshot?.width || 0" :height="screenshot?.height || 0" :busy="saving" @confirm="confirmSave" />
     <WatermarkPanel v-model:open="watermarkOpen" :model-value="watermark" :fonts="fonts" @update:model-value="setWatermark" />
   </div>
@@ -703,6 +761,7 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
 .ocr-region.active { border-color: #6e47b7; background: #9370ce30; box-shadow: 0 0 0 1px #8b65c754; }
 .ocr-region > span { position: absolute; top: 0; left: 0; padding: 0 3px; border-radius: 0 0 3px 0; color: #fff; background: #9577bf; font-size: 9px; line-height: 14px; }
 .ocr-region.active > span { background: #724fb0; }
+.ocr-region.translated { background:#fff; }
 .tool-list { min-width: 0; overflow-x: auto; }
 .tool-button { flex-shrink: 0; }
 .history-actions { flex-shrink: 0; }

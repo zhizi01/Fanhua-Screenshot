@@ -71,6 +71,45 @@ async function run() {
     await expect(paragraphs.nth(0)).toContainText(/Open the image/i)
     await expect(paragraphs.nth(1)).toContainText(/Please save the image/i)
     const textAt = index => preview.getByLabel(`第 ${index + 1} 段译文`, { exact: true })
+    const overlays = preview.getByTestId('translation-overlay')
+    const regions = preview.getByTestId('ocr-region')
+    await expect(overlays).toHaveCount(0)
+    async function overlayGeometry() {
+      return preview.evaluate(async () => {
+        // ResizeObserver and the component's text fitting frame must both settle.
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+        const canvas = document.querySelector('[data-testid="editor-canvas"]')
+        const image = canvas.getBoundingClientRect()
+        return {
+          imageWidth: image.width,
+          regions: [...document.querySelectorAll('[data-testid="ocr-region"]')].map(region => {
+            const bounds = region.getBoundingClientRect()
+            const overlay = region.querySelector('[data-testid="translation-overlay"]')
+            const mask = overlay?.getBoundingClientRect()
+            const copy = overlay?.querySelector('[data-testid="translation-overlay-text"]')
+            return {
+              id: region.dataset.paragraphId,
+              position: [(bounds.x - image.x) / image.width, (bounds.y - image.y) / image.height, bounds.width / image.width, bounds.height / image.height],
+              inset: mask ? [mask.left - bounds.left, mask.top - bounds.top, bounds.right - mask.right, bounds.bottom - mask.bottom] : null,
+              text: copy?.textContent, fontSize: copy && Number.parseFloat(getComputedStyle(copy).fontSize),
+              pointerEvents: overlay && getComputedStyle(overlay).pointerEvents,
+            }
+          }),
+        }
+      })
+    }
+    function assertOverlayGeometry(actual, baseline) {
+      assert.equal(actual.regions.length, 2)
+      actual.regions.forEach((region, index) => {
+        assert(region.inset && region.inset.every(value => value >= -.2 && value <= 1.5), 'Translation mask must stay inside its original OCR rectangle')
+        assert(region.fontSize >= 11 && region.fontSize <= 48, 'Translation text must remain readable')
+        assert.equal(region.pointerEvents, 'none', 'Translation mask must not intercept image editing or selection')
+        if (baseline) {
+          assert.equal(region.id, baseline.regions[index].id)
+          region.position.forEach((value, coordinate) => assert(Math.abs(value - baseline.regions[index].position[coordinate]) < .003, 'Translation mask must track original image coordinates through zoom and scroll'))
+        }
+      })
+    }
     async function waitForTranslation(index, pattern) {
       await preview.waitForFunction(label => document.querySelector(`[aria-label="${label}"]`)?.textContent?.trim()
         || document.querySelector('[data-testid="translation-controls"] [role="alert"]')?.textContent,
@@ -92,11 +131,49 @@ async function run() {
     checkMeaning('Open the image.', englishToChinese[0], /图|圖|影像/)
     checkMeaning('Please save the image.', englishToChinese[1], /保存|储存|存储|存檔/)
     const englishDurationMs = Date.now() - englishStarted
+    await expect(overlays).toHaveCount(2)
+    const initialOverlayGeometry = await overlayGeometry()
+    assertOverlayGeometry(initialOverlayGeometry)
+    assert.deepEqual(initialOverlayGeometry.regions.map(region => region.text), englishToChinese, 'Image overlays must show the same complete translation as the sidebar')
+    const firstRegion = await regions.nth(0).boundingBox()
+    const firstCenter = { x: firstRegion.x + firstRegion.width / 2, y: firstRegion.y + firstRegion.height / 2 }
+    assert.equal(await preview.evaluate(point => document.elementFromPoint(point.x, point.y)?.dataset.testid, firstCenter), 'editor-canvas', 'Translated image remains pointer-accessible')
+    await preview.mouse.move(firstCenter.x, firstCenter.y)
+    await expect(preview.getByTestId('editor-canvas')).toHaveAttribute('title', englishToChinese[0])
+    await preview.mouse.click(firstCenter.x, firstCenter.y)
+    await expect(paragraphs.nth(0)).toHaveAttribute('aria-current', 'true')
+    await preview.keyboard.down('Control')
+    try { await preview.mouse.wheel(0, -120) } finally { await preview.keyboard.up('Control') }
+    await expect.poll(async () => (await preview.getByTestId('editor-canvas').boundingBox()).width).toBeGreaterThan(initialOverlayGeometry.imageWidth * 1.1)
+    const zoomedOverlayGeometry = await overlayGeometry()
+    assertOverlayGeometry(zoomedOverlayGeometry, initialOverlayGeometry)
+    // Use a guaranteed overflowing image before checking both horizontal and
+    // vertical scrolling; OCR masks stay tied to the image, not the viewport.
+    await preview.getByRole('button', { name: '原始大小', exact: true }).click()
+    await preview.getByRole('button', { name: '放大图片', exact: true }).click()
+    const scroll = await preview.getByTestId('image-stage').evaluate(stage => {
+      stage.scrollLeft = stage.scrollWidth; stage.scrollTop = stage.scrollHeight
+      return { x: stage.scrollLeft, y: stage.scrollTop }
+    })
+    assert(scroll.x > 0 || scroll.y > 0, 'The scroll alignment regression must actually scroll the image')
+    assertOverlayGeometry(await overlayGeometry(), initialOverlayGeometry)
+    await preview.getByRole('button', { name: '适应窗口', exact: true }).click()
+    await preview.screenshot({ path: `artifacts/translation-overlay-${mode}.png`, animations: 'disabled' })
+    await preview.getByRole('button', { name: '翻译', exact: true }).click()
+    await expect(overlays).toHaveCount(0)
+    await expect(regions).toHaveCount(2)
+    await expect(regions.nth(0)).not.toHaveClass(/translated/)
+    await preview.getByRole('button', { name: '翻译', exact: true }).click()
+    await expect(overlays).toHaveCount(2)
+    assert.deepEqual((await overlayGeometry()).regions.map(region => region.text), englishToChinese, 'Reopening translation must restore valid masks without rerunning the model')
     await preview.getByRole('button', { name: '翻译第 1 段', exact: true }).click()
     await waitForTranslation(0, /[\u3400-\u9fff]/)
 
     await editParagraph(0, 'Close the window.')
     await expect(textAt(0)).toHaveCount(0)
+    await expect(overlays).toHaveCount(1)
+    await expect(regions.nth(0)).not.toHaveClass(/translated/)
+    await expect(regions.nth(1).getByTestId('translation-overlay-text')).toHaveText(englishToChinese[1])
     assert.equal(await textAt(1).innerText(), englishToChinese[1], 'Editing one original must preserve other translations')
     await preview.getByRole('button', { name: '翻译第 1 段', exact: true }).click()
     const revisedChinese = await waitForTranslation(0, /[\u3400-\u9fff]/)
@@ -105,13 +182,18 @@ async function run() {
     await expect.poll(() => application.evaluate(async ({ clipboard }) => clipboard.readText())).toBe(revisedChinese)
     await preview.getByRole('button', { name: '关闭文字识别', exact: true }).click()
     await expect(preview.getByTestId('ocr-sidebar')).toHaveCount(0)
+    await expect(overlays).toHaveCount(0)
     await preview.getByRole('button', { name: '识别文字', exact: true }).click()
     await expect(textAt(0)).toHaveText(revisedChinese)
+    await expect(overlays).toHaveCount(2)
+    await expect(regions.nth(0).getByTestId('translation-overlay-text')).toHaveText(revisedChinese)
 
     await preview.getByLabel('翻译方向', { exact: true }).click()
     await preview.getByText('中文 → 英文', { exact: true }).click()
     await expect(textAt(0)).toHaveCount(0)
     await expect(textAt(1)).toHaveCount(0)
+    await expect(overlays).toHaveCount(0)
+    await expect(regions).toHaveCount(2)
     await editParagraph(0, '请打开图片。')
     await editParagraph(1, '请保存图片。')
     const chineseStarted = Date.now()
@@ -122,6 +204,8 @@ async function run() {
     checkMeaning('请保存图片。', chineseToEnglish[1], /save/i)
     checkMeaning('请保存图片。', chineseToEnglish[1], /image|picture|photo/i)
     const chineseDurationMs = Date.now() - chineseStarted
+    await expect(overlays).toHaveCount(2)
+    assert.deepEqual((await overlayGeometry()).regions.map(region => region.text), chineseToEnglish)
     await preview.getByRole('button', { name: '复制全部译文', exact: true }).click()
     await expect.poll(() => application.evaluate(async ({ clipboard }) => clipboard.readText())).toBe(chineseToEnglish.join('\n\n'))
 
@@ -139,18 +223,30 @@ async function run() {
     assert.equal(exportMatchesOriginal, true, 'OCR text edits, virtual boxes and translations must not enter image export')
 
     await editParagraph(0, '请在关闭窗口之前保存当前图片。'.repeat(80))
+    await expect(overlays).toHaveCount(1)
     await preview.getByRole('button', { name: '翻译第 1 段', exact: true }).click()
     await preview.getByRole('button', { name: '取消翻译', exact: true }).click()
     await expect(preview.getByRole('button', { name: '取消翻译', exact: true })).toHaveCount(0, { timeout: 30000 })
+    await expect(overlays).toHaveCount(1)
+    await expect(regions.nth(0)).not.toHaveClass(/translated/)
     await editParagraph(0, '请关闭窗口。')
     await preview.getByRole('button', { name: '翻译第 1 段', exact: true }).click()
     const afterCancel = await waitForTranslation(0, /[a-z]/i)
     checkMeaning('请关闭窗口。', afterCancel, /close/i)
+    await expect(regions.nth(0).getByTestId('translation-overlay-text')).toHaveText(afterCancel)
+    await preview.getByRole('button', { name: '重新识别', exact: true }).click()
+    await expect(overlays).toHaveCount(0)
+    await expect(paragraphs.nth(0)).toContainText(/Open the image/i, { timeout: 120000 })
+    await expect(preview.getByRole('button', { name: '重新识别', exact: true })).toBeEnabled()
+    await expect(overlays).toHaveCount(0)
+    await expect(regions).toHaveCount(2)
     await fs.writeFile(`artifacts/translation-ui-checkpoint-${mode}.json`, JSON.stringify({
       englishToChinese, revisedChinese, chineseToEnglish, afterCancel, qualityChecks,
       englishDurationMs, chineseDurationMs, exportMatchesOriginal, canceledAndRetried: true,
+      overlayMatchesSidebar: true, overlayPointerPassthrough: true, overlayParagraphSelection: true,
+      overlayZoomAlignment: true, overlayScrollAlignment: true, overlayCloseRestore: true, overlayOcrReset: true,
     }, null, 2) + '\n')
-    console.log('OCR, bidirectional translation, invalidation, clipboard, export isolation and UI cancel/retry completed.')
+    console.log('OCR, bidirectional translation, image overlays, zoom/scroll alignment, invalidation, clipboard, export isolation and UI cancel/retry completed.')
 
     await settings.evaluate(() => window.fanhua.openImage())
     const other = await findWindow(application, 'preview', preview)
@@ -248,6 +344,9 @@ async function run() {
       englishDurationMs, chineseDurationMs, totalDurationMs: Date.now() - started,
       nonPreviewIpcRejected: true, editInvalidation: true, closeReopenPreserved: true,
       realTextClipboard: true, exportMatchesOriginal, canceledAndRetried: true,
+      overlayMatchesSidebar: true, overlayPointerPassthrough: true, overlayParagraphSelection: true,
+      overlayZoomAlignment: true, overlayScrollAlignment: true, overlayCloseRestore: true, overlayOcrReset: true,
+      initialOverlayGeometry, zoomedOverlayGeometry,
       foreignCancelRejected: true, concurrentRejected, captureDuringTranslation: true, longCancelRecovery: true, ownerCloseRecovery: true,
       childProcessExitRecovery: true, terminatedTestChildPid: terminatedPid,
       captureDurationMs, qualityChecks, pageErrors: errors,

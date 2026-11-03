@@ -18,6 +18,7 @@ export interface Screenshot {
   width: number
   height: number
   createdAt: string
+  initialEditing?: boolean
 }
 export interface AppState {
   shortcut: string

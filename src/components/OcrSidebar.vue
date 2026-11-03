@@ -111,7 +111,7 @@ function updateText(id: string, event: Event) {
       <div v-else-if="!translation.available" class="translation-warning" role="status">{{ translation.reason }}<button type="button" class="translation-link" aria-label="重试检查翻译模型" @click="emit('translation:retry')">重试</button></div>
       <div v-else-if="translation.busy" class="translation-status" role="status"><LoaderCircle :size="12" class="spin" /><span>{{ translation.status }} {{ translation.completed }}/{{ translation.total }}</span></div>
       <div v-else-if="translation.error" class="translation-error" role="alert">{{ translation.error }}<button type="button" class="translation-link" aria-label="重试翻译" :disabled="busy || !allText.trim()" @click="emit('translate')">重试</button></div>
-      <p v-else class="translation-help" role="status">{{ busy ? '识别完成后即可翻译。' : translation.notice || '译文显示在原文下方，请对照核对。' }}</p>
+      <p v-else class="translation-help" role="status">{{ busy ? '识别完成后即可翻译。' : translation.notice || '译文同时显示在图片原位和原文下方，请对照核对。' }}</p>
     </section>
 
     <div ref="list" class="paragraph-list" role="list" aria-label="识别段落" data-testid="ocr-paragraph-list" :aria-busy="busy">
