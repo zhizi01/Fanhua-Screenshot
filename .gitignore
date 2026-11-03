@@ -9,3 +9,4 @@ playwright-report/
 .env.local
 artifacts/
 resources/translation/Xenova/
+public/pdf-assets/
