@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Button as AButton, InputNumber as AInputNumber, Slider as ASlider, Select as ASelect, message } from 'ant-design-vue'
-import { ArrowUpRight, Check, ChevronDown, Circle, Download, Flower2, Grip, Image as ImageIcon, Languages, Layers3, Maximize, Minus, MousePointer2, Pencil, Pin, PinOff, Plus, Redo2, RefreshCw, Scan, ScanText, Square, Stamp, Trash2, Type, Undo2, X } from 'lucide-vue-next'
-import type { ExportOptions, ImageFormat, OcrCapabilities, OcrParagraph, Screenshot, WatermarkConfig } from '../shared'
+import { ArrowUpRight, Check, ChevronDown, Circle, Download, Flower2, Grip, Image as ImageIcon, Languages, Layers3, Maximize, Minus, MousePointer2, Pencil, Pin, PinOff, Plus, Redo2, RefreshCw, Scan, ScanText, Settings, Square, Stamp, Trash2, Type, Undo2, X } from 'lucide-vue-next'
+import type { AppSettings, ExportOptions, ImageFormat, OcrCapabilities, OcrParagraph, Screenshot, WatermarkConfig } from '../shared'
 import { getDemoScreenshot } from '../demo'
 import { arrowEndpointAt, DocumentHistory, hitTest, imagePoint, markerDiameter, moveLayer, normalizeRect, resizeShape, sequenceLabel, shapeHandleAt, shapeRect, visualLayers, type ArrowLayer, type BorderStyle, type EditorDocument, type Layer, type MosaicLayer, type NumberStyle, type Point, type ShapeHandle, type ShapeLayer, type TextStyle, type Tool } from '../editor/model'
 import { canvasFont, paintArrow, paintShape, renderScene, renderSelection, textMeasure } from '../editor/render'
@@ -43,6 +43,7 @@ const copying = ref<'png' | 'deskflow' | null>(null)
 const sharing = ref(false)
 const saved = ref(false)
 const exportOpen = ref(false)
+const preferences = ref<AppSettings>()
 const ocrOpen = ref(false)
 const ocrBusy = ref(false)
 const ocrError = ref('')
@@ -702,6 +703,27 @@ async function togglePin() {
 }
 async function close() { if (window.fanhua) await window.fanhua.closeWindow(); else location.search = '' }
 async function minimize() { await window.fanhua?.minimizeWindow() }
+async function openSettings() {
+  try { if (window.fanhua) await window.fanhua.openSettings(); else location.search = '?view=settings' }
+  catch { message.error('无法打开设置，请通过托盘重试') }
+}
+async function loadPreferences() {
+  if (!window.fanhua) return
+  try {
+    const value = await window.fanhua.getSettings()
+    if (disposed) return
+    preferences.value = value
+    const editor = value.editor
+    defaults.value = { font: editor.font, size: editor.size, color: editor.color }
+    numberStyle.value = editor.markerStyle
+    markerHeadSize.value = editor.markerHeadSize
+    arrowDefaults.value = { lineWidth: editor.arrowLineWidth, headSize: editor.arrowHeadSize }
+    shapeDefaults.value = { lineWidth: editor.shapeLineWidth, borderStyle: editor.shapeBorderStyle }
+    mosaicStrength.value = editor.mosaicStrength
+    ocrLanguage.value = value.ocrLanguage
+    translation.changeDirection(value.translationDirection)
+  } catch { message.warning('无法读取偏好设置，本窗口使用默认选项') }
+}
 function keyDown(event: KeyboardEvent) {
   if (exportOpen.value || watermarkOpen.value || saving.value || loading.value) return
   const target = event.target as HTMLElement
@@ -746,6 +768,7 @@ onMounted(async () => {
   })
   if (stage.value) resizeObserver.observe(stage.value)
   try {
+    await loadPreferences()
     const initial = await (window.fanhua ? window.fanhua.getPreview() : getDemoScreenshot())
     if (disposed) return
     originalScreenshot = { ...initial, pdf: undefined }
@@ -784,7 +807,7 @@ onBeforeUnmount(() => {
   <div class="preview-app">
     <header class="titlebar drag-region">
       <div class="brand"><Flower2 :size="16" /><span>繁花有图</span><span class="window-name">{{ editing ? '编辑' : '预览' }}</span><span v-if="!isDesktop" class="demo-label">演示</span></div>
-      <div class="window-controls no-drag"><button class="icon-button" aria-label="最小化窗口" @click="minimize"><Minus :size="16" /></button><button class="icon-button danger" aria-label="关闭窗口不保存" title="关闭窗口，不自动保存" @click="close"><X :size="17" /></button></div>
+      <div class="window-controls no-drag"><button class="icon-button" aria-label="打开设置" title="偏好设置" @click="openSettings"><Settings :size="15" /></button><button class="icon-button" aria-label="最小化窗口" @click="minimize"><Minus :size="16" /></button><button class="icon-button danger" aria-label="关闭窗口不保存" title="关闭窗口，不自动保存" @click="close"><X :size="17" /></button></div>
     </header>
     <div class="preview-topbar">
       <div class="file-identity"><ImageIcon :size="14" /><span>{{ screenshot ? `${screenshot.width} × ${screenshot.height}` : '读取图片…' }}</span><span v-if="layers.length" class="annotation-count">{{ layers.length }} 个标注</span></div>
@@ -869,7 +892,7 @@ onBeforeUnmount(() => {
     </main>
     <footer class="statusbar"><div class="image-status"><span :class="['status-dot', { unsaved: !saved }]"></span><span v-if="pdfPageCount">第 {{ pdfPage }} 页</span><span>{{ saved ? '已保存到本地' : '未保存' }}</span><span v-if="pinned" class="pin-status">已置顶</span><span v-if="editing" class="status-hint">{{ toolHint }}</span></div><div class="zoom-controls" title="Ctrl + 鼠标滚轮缩放图片"><button class="icon-button" aria-label="缩小图片" @click="zoom(scale / 1.2)"><Minus :size="13" /></button><button class="zoom-value" aria-label="原始大小" title="原始大小 100%" @click="zoom(1)">{{ Math.round(scale * 100) }}%<ChevronDown :size="10" /></button><button class="icon-button" aria-label="放大图片" @click="zoom(scale * 1.2)"><Plus :size="13" /></button><i></i><button class="fit-button" :class="{ active: fitMode }" aria-label="适应窗口" title="适应窗口" @click="fit"><Maximize :size="13" /><span>适应</span></button></div></footer>
     <ImageContextMenu :open="contextMenu.open" :x="contextMenu.x" :y="contextMenu.y" :editing="editing" :has-selection="!!selected" :can-undo="canUndo" :can-redo="canRedo" @close="closeImageContextMenu" @command="contextCommand" />
-    <SaveExportDialog v-model:open="exportOpen" :width="screenshot?.width || 0" :height="screenshot?.height || 0" :busy="saving" :pdf="!!pdfPageCount" :page-count="pdfPageCount" :current-page="pdfPage" :progress="pdfProgress" :canceling="pdfCanceling" @confirm="confirmSave" @cancel-export="cancelPdfExport" />
+    <SaveExportDialog v-model:open="exportOpen" :width="screenshot?.width || 0" :height="screenshot?.height || 0" :busy="saving" :pdf="!!pdfPageCount" :page-count="pdfPageCount" :current-page="pdfPage" :progress="pdfProgress" :canceling="pdfCanceling" :defaults="preferences" @confirm="confirmSave" @cancel-export="cancelPdfExport" />
     <WatermarkPanel v-model:open="watermarkOpen" :model-value="watermark" :fonts="fonts" @update:model-value="setWatermark" />
   </div>
 </template>

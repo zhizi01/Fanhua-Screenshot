@@ -28,7 +28,7 @@ async function run() {
   const errors = []
   app.on('window', page => page.on('pageerror', error => errors.push(error.message)))
   try {
-    const settings = await findWindow(app, 'dashboard')
+    const settings = await findWindow(app, 'settings')
     const denied = await settings.evaluate(async () => {
       const result = []
       for (const operation of [() => window.fanhua.copyImage('data:image/png;base64,AA=='), () => window.fanhua.shareViaLocalSend('data:image/png;base64,AA==')]) {

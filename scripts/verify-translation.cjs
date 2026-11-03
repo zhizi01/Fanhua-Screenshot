@@ -31,7 +31,7 @@ async function run() {
   application.on('window', page => page.on('pageerror', error => errors.push(error.message)))
   const started = Date.now()
   try {
-    const settings = await findWindow(application, 'dashboard')
+    const settings = await findWindow(application, 'settings')
     const rejected = await settings.evaluate(async () => {
       const failures = []
       for (const operation of [

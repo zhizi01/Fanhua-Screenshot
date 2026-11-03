@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { Modal as AModal, Select as ASelect, Slider as ASlider } from 'ant-design-vue'
-import type { ExportOptions } from '../shared'
+import type { AppSettings, ExportOptions } from '../shared'
 
-const props = defineProps<{ open: boolean; width: number; height: number; busy: boolean; pdf?: boolean; pageCount?: number; currentPage?: number; progress?: { completed: number; total: number; finalizing: boolean }; canceling?: boolean }>()
+const props = defineProps<{ open: boolean; width: number; height: number; busy: boolean; pdf?: boolean; pageCount?: number; currentPage?: number; progress?: { completed: number; total: number; finalizing: boolean }; canceling?: boolean; defaults?: AppSettings }>()
 const emit = defineEmits<{ 'update:open': [value: boolean]; confirm: [options: ExportOptions]; cancelExport: [] }>()
 const format = ref<ExportOptions['format']>('png')
 const scope = ref<'current' | 'all'>('current')
@@ -11,7 +11,11 @@ const quality = ref(92)
 const lossy = computed(() => format.value === 'jpeg' || format.value === 'webp')
 const cancelButtonProps = computed(() => ({ disabled: props.busy && (!props.progress || !!props.canceling || props.progress.finalizing), 'aria-label': props.busy && props.progress ? '取消 PDF 导出' : '取消' }))
 watch(() => props.open, value => {
-  if (value) { format.value = props.pdf ? 'pdf' : 'png'; scope.value = props.pdf ? 'all' : 'current' }
+  if (value) {
+    format.value = props.pdf ? 'pdf' : props.defaults?.imageFormat || 'png'
+    scope.value = props.pdf ? props.defaults?.pdfScope || 'all' : 'current'
+    quality.value = props.defaults?.imageQuality || 92
+  }
 })
 const descriptions: Record<ExportOptions['format'], string> = {
   png: '无损画质，支持透明背景，适合文字和界面截图。',

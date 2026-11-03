@@ -43,8 +43,8 @@ async function run() {
   const report = { mode }
   let current
   try {
-    await expect.poll(() => app.windows().some(page => page.url().includes('view=dashboard')), { timeout: 30000 }).toBe(true)
-    const settings = app.windows().find(page => page.url().includes('view=dashboard'))
+    await expect.poll(() => app.windows().some(page => page.url().includes('view=settings')), { timeout: 30000 }).toBe(true)
+    const settings = app.windows().find(page => page.url().includes('view=settings'))
     async function open(file) {
       const previous = new Set(app.windows())
       await app.evaluate(({ dialog }, filePath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [filePath] }) }, file)

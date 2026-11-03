@@ -28,7 +28,7 @@ async function run() {
   const errors = []
   app.on('window', page => page.on('pageerror', error => errors.push(error.message)))
   try {
-    const settings = await findWindow(app, 'dashboard')
+    const settings = await findWindow(app, 'settings')
     const source = await settings.evaluate(() => {
       const canvas = document.createElement('canvas'); canvas.width = 1200; canvas.height = 700
       const ctx = canvas.getContext('2d')

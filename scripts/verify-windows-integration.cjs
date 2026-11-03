@@ -52,16 +52,20 @@ function bmp32(pixels, width, height, topDown) {
 
 async function checkInstaller() {
   const source = await fs.readFile(path.join(project, 'build/installer.nsh'), 'utf8')
-  assert(!/\bHKCU\b|\bHKLM\b|\bHKCR\b|UserChoice|SetShellVarContext/i.test(source), 'Context verbs must follow the installer-selected scope and preserve default associations')
+  assert(!/^\s*WriteReg\w+\b/m.test(source), 'Installing must never opt the user into an Explorer menu')
+  assert(!/UserChoice|SetShellVarContext/i.test(source), 'Cleanup must preserve default associations and installer-selected scope')
   assert(source.includes('"$INSTDIR\\${APP_EXECUTABLE_FILENAME}" --edit-image "%1"'), 'Both executable and image path must be quoted')
-  assert(source.includes('"MultiSelectModel" "Single"'))
   for (const extension of ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'pdf']) {
-    assert(source.includes(`!insertmacro FanhuaRegisterImageVerb "${extension}"`))
-    assert(source.includes(`!insertmacro FanhuaUnregisterImageVerb "${extension}"`))
+    assert(source.includes('!insertmacro FanhuaRemoveLegacyImageVerb ${ROOT} "' + extension + '"'))
+    assert(source.includes('!insertmacro FanhuaUnregisterImageVerb ${ROOT} "' + extension + '"'))
   }
-  const writes = source.split('\n').filter(line => /WriteRegStr|DeleteRegKey/.test(line))
-  assert(writes.every(line => line.includes('SHCTX "Software\\Classes\\SystemFileAssociations\\.${EXT}\\shell\\FanhuaScreenshot.Edit')))
-  assert(/ReadRegStr \$R0 SHCTX[\s\S]+StrCmp \$R0[^\n]+0 \+2\s+DeleteRegKey SHCTX/.test(source), 'Uninstall must check ownership in the selected installation scope before deleting its verb')
+  const deletes = source.split('\n').filter(line => /DeleteRegKey/.test(line))
+  assert(deletes.length > 0 && deletes.every(line => line.includes('${ROOT} "Software\\Classes\\SystemFileAssociations\\.${EXT}\\shell\\FanhuaScreenshot.Edit')))
+  const legacy = source.slice(source.indexOf('!macro FanhuaRemoveLegacyImageVerb'), source.indexOf('!macroend'))
+  assert(legacy.includes('${If} $R0 ==') && legacy.includes('"FanhuaOptIn"') && legacy.includes('${If} $R1 != "1"'), 'Legacy cleanup must preserve settings-created opt-in menus')
+  assert(source.includes('!insertmacro FanhuaCleanLegacyScope SHCTX') && source.includes('!insertmacro FanhuaCleanLegacyScope HKCU'))
+  const uninstall = source.slice(source.indexOf('!macro FanhuaUnregisterImageVerb'), source.indexOf('!macro FanhuaCleanLegacyScope'))
+  assert(uninstall.includes('${If} $R0 ==') && uninstall.includes('DeleteRegKey ${ROOT}'), 'Uninstall must check command ownership before deleting its verb')
   const templates = path.join(project, 'node_modules/app-builder-lib/templates/nsis')
   const [multiUser, installer, uninstaller] = await Promise.all(['multiUser.nsh', 'installer.nsi', 'uninstaller.nsh'].map(file => fs.readFile(path.join(templates, file), 'utf8')))
   assert(/!macro setInstallModePerUser[\s\S]+?SetShellVarContext current/.test(multiUser))
@@ -170,13 +174,16 @@ async function integrationTests(executable, env) {
   const mode = executable ? 'packaged' : 'source'
   const executablePath = executable || require('electron')
   const baseArgs = executable ? [] : ['.']
-  const profile = `--user-data-dir=${path.join(artifacts, `windows-integration-${mode}-profile`)}`
+  const profileDirectory = path.join(artifacts, `windows-integration-${mode}-profile`)
+  await fs.mkdir(profileDirectory, { recursive: true })
+  await fs.writeFile(path.join(profileDirectory, 'settings.json'), JSON.stringify({ version: 1, settings: { startupNotification: false } }))
+  const profile = `--user-data-dir=${profileDirectory}`
   const fixture = extension => path.join(artifacts, `右键 图片 & 测试.${extension}`)
   const app = await electron.launch({ executablePath, args: [...baseArgs, profile, '--edit-image', fixture('png')], cwd: project, env, timeout: 30000 })
   const errors = []
   app.on('window', page => page.on('pageerror', error => errors.push(error.message)))
   const previews = () => app.windows().filter(page => page.url().includes('view=preview'))
-  const report = { mode, opened: [], noDashboard: false, previousPreviewPreserved: false, pdfFirstLaunchEditing: false, pdfSecondInstanceEditing: false, normalStartupStaysInTray: false, pageErrors: errors }
+  const report = { mode, opened: [], noSettingsWindow: false, previousPreviewPreserved: false, pdfFirstLaunchEditing: false, pdfSecondInstanceEditing: false, normalStartupStaysInTray: false, pageErrors: errors }
   try {
     await expect.poll(() => previews().length, { timeout: 20000 }).toBe(1)
     const first = previews()[0]
@@ -219,8 +226,8 @@ async function integrationTests(executable, env) {
       assert.notEqual(context.id, original.id)
       report.opened.push(extension)
     }
-    assert.equal(app.windows().filter(page => page.url().includes('view=dashboard')).length, 0, 'Image startup must not open the settings window')
-    report.noDashboard = true
+    assert.equal(app.windows().filter(page => page.url().includes('view=settings')).length, 0, 'Image startup must not open the settings window')
+    report.noSettingsWindow = true
     const launchState = await app.evaluate(({ app }) => app.__imageOpenRegression)
     assert.equal(launchState.launches.length, 5, 'All subsequent image/PDF opens must forward to the original process')
     assert.deepEqual(launchState.messages, [], 'Valid forwarded image paths must not produce native error dialogs')
@@ -247,7 +254,7 @@ async function integrationTests(executable, env) {
     assert.equal(context.initialEditing, true)
     assert.equal(context.name, path.basename(fixture('pdf')))
     assert(context.byteLength > 0)
-    assert.equal(pdfApp.windows().filter(page => page.url().includes('view=dashboard')).length, 0)
+    assert.equal(pdfApp.windows().filter(page => page.url().includes('view=settings')).length, 0)
     await page.screenshot({ path: path.join(artifacts, `windows-pdf-entry-${mode}.png`) })
     report.pdfFirstLaunchEditing = true
     assert.deepEqual(errors, [])
@@ -269,7 +276,7 @@ if (process.versions.electron) {
   app.setPath('userData', path.join(artifacts, 'windows-decoder-profile'))
   app.whenReady().then(() => decoderTests(nativeImage)).then(() => app.quit()).catch(error => { console.error(error); app.exit(1) })
 } else if (process.argv.includes('--installer-only')) {
-  checkInstaller().then(() => console.log('NSIS verb scope follows current/all ShellVarContext; ownership and quoted arguments verified. No installer executed.'))
+  checkInstaller().then(() => console.log('NSIS 默认不注入右键菜单；旧注册清理、主动启用标记保留、命令归属检查通过。未执行安装程序。'))
     .catch(error => { console.error(error); process.exitCode = 1 })
 } else {
   const env = { ...process.env }
