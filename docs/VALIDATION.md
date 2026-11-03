@@ -1,5 +1,37 @@
 # 验证记录
 
+## 1.3.0：中英离线翻译
+
+日期：2026-11-03。Windows 11、Node.js 24.16.0、Electron 45.2.1。本轮保留工作区既有测试文件删除，使用新增的独立脚本验证，不把下方 1.2.0 历史测试计入本轮结果。
+
+- `models:check` 校验两个方向的 14 个文件，合计 238,991,573 字节，所有文件大小和 SHA-256 一致。模型固定 revision，许可与署名随包保留。
+- `build` 包含类型检查与 Vite 构建，通过。
+- `test:translation:service` 验证输入与长度限制、真实 tokenizer 长文切分、非空白字符完整保留、任务互斥、窗口归属、初始化中取消、运行中取消、重试、空闲释放、模型缺失及服务退出。
+- `test:translation:offline` 在翻译子进程中禁止 fetch、HTTP/HTTPS、TCP/TLS 连接，仍完成真实英译中、中译英和方向切换。连续两次中断推理、owner 关闭、直接结束推理进程后，后续请求均恢复成功；结束时没有残留测试翻译进程。
+- `test:translation` 在真实 Electron 中从图片 OCR 开始，覆盖双向全部／单段翻译、修改原文使对应译文失效、文字剪贴板、关闭识别栏后恢复结果、取消后重试。保存 PNG 与原图逐像素相同，OCR 修正文字、虚拟框及译文均未进入图片。
+- 界面回归同时验证非预览窗口的翻译 IPC 被拒绝、其他预览不能取消发起窗口任务、并发翻译被明确拒绝、翻译期间开始并取消真实截图、关闭任务所属窗口后其他窗口继续翻译，以及实际终止测试翻译子进程后的恢复。源码版完整流程约 9.2 秒，无页面异常，截图已目检。
+- 最终 `release/1.3.0/win-unpacked/繁花有图.exe` 重跑同一完整翻译流程，通过（约 9.0 秒）；两段英译中约 924 ms、两段中译英约 803 ms，翻译未完成时开始并取消截图约 698 ms。连续取消、owner 关闭和实际子进程异常退出恢复均通过，无页面异常。
+- 同一最终打包 EXE 顺序重跑 OCR 原图隔离回归，通过：两次 OCR 的实际输入字节及像素仍与原图一致；保存保留文字、水印和箭头，系统剪贴板图片与保存文件逐像素一致。
+- 打包目录的 14 个模型文件再次独立校验 SHA-256，全通过；仅包含 Windows x64 ONNX 原生运行库，未混入 macOS／Linux／ARM64 文件。UTF-8 严格解码与 Git 空白检查通过。
+
+最终架构使用 `utilityProcess` 隔离 ONNX 推理，取消通过结束该子进程完成。验证中发现的 Node 工作线程强制终止导致主程序退出问题已修复，并使用上述连续取消、窗口关闭和进程异常路径复验。
+
+结果记录位于 `artifacts/translation-inference.json`、`artifacts/translation-regression-source.json`、`artifacts/translation-regression-packaged.json`、`artifacts/ocr-source-regression-packaged.json` 及对应界面截图。性能数据仅代表当前机器的小样本运行，未控制操作系统文件缓存，不作为其他电脑的速度或内存保证。
+
+### 安装包与验证范围
+
+安装包：`release/1.3.0/Fanhua-Screenshot-1.3.0-Setup.exe`，336,551,992 字节，内含 OCR 和中英翻译模型。
+
+SHA-256：`8130b4ff18425525161c30a35c5cd7f0d777966b7fe29bffe8fb57f4861218d2`。
+
+构建复用 `node_modules/electron/dist` 中已安装的 Electron 45.2.1，避免重复下载运行库。测试运行打包目录内的 EXE，未执行安装向导或修改开机启动。使用独立测试配置，未关闭用户旧版应用；本轮通过调用截图入口验证并发操作，没有发送实际系统级 Alt+A 按键。安装包尚未签名，真实多显示器与跨平台验证范围沿用下方历史记录。
+
+### 翻译质量边界
+
+这是轻量 OPUS-MT 专用模型，不保证任意文本准确。实测 `Open the image.` → `打开图像。`、`Please save the image.` → `请保存图像。`、`请打开图片。` → `Please open the picture.`；同时 `Close the window.` 被译为 `关上窗户`，缺少桌面上下文。`Hello, world!` 与 `Good morning.` 样例存在明显误译或增译，原始对照保存在 `artifacts/translation-quality-samples.json`。
+
+保留官方简体中文目标标记：移除它虽然改善个别寒暄句，但损坏其他样例中的 PNG 和文字识别用语。没有针对测试句硬编码译文。界面保留原文并提示对照核对；功能回归和少量关键词检查不代表总体翻译准确率，重要内容应人工核对。
+
 ## 1.2.1：OCR 原图隔离修复
 
 日期：2026-11-03。环境沿用下方 Windows 11 / Node.js 24.16.0 / Electron 45.2.1。

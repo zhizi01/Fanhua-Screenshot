@@ -2,7 +2,7 @@
 
 ## 桌面交互
 
-1.2.1 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 使用图片右侧的独立段落栏，保存格式和水印使用就地弹窗，不引入账户、项目列表或页面导航流程。
+1.3.0 继续采用桌面工具流程：程序默认只保留系统托盘和全局快捷键，不自动显示主窗口。托盘打开的是紧凑设置窗口；截图后直接进入独立预览，需要标注时展开工具栏和属性栏，可以同时保留多张截图。OCR 与中英译文使用图片右侧的独立段落栏，保存格式和水印使用就地弹窗，不引入账户、项目列表或页面导航流程。
 
 内部路由沿用 `dashboard`、`capture`、`preview` 三个值。其中 `dashboard` 对应设置窗口，不是页面导航式工作台。
 
@@ -22,7 +22,8 @@
 | 水印渲染 | `src/watermark/` | 普通配置对象、图片解码缓存、旋转布局、平铺及浏览器存档回退。 |
 | Windows 服务 | `electron/native-helper.cjs`、`electron/native/windows.ps1` | 顶层窗口、系统与当前用户字体及本地化名称枚举。 |
 | OCR 服务 | `electron/ocr.cjs`、`electron/ocr-paragraphs.cjs`、`electron/native/ocr.ps1`、`electron/ocr-worker.cjs` | 系统 OCR 能力查询、原生识别、Tesseract 离线回退、段落归并和任务生命周期。 |
-| 翻译契约 | `src/services/translation.ts` | 预留请求、结果和提供方接口；当前禁用，无实际翻译调用。 |
+| 翻译界面状态 | `src/services/translation.ts` | 翻译方向、段落原文版本、进度、取消、过期结果隔离及译文保留。 |
+| 离线翻译服务 | `electron/translation.cjs`、`translation-worker.cjs`、`translation-text.cjs` | 本地模型检查、任务互斥、CPU 推理、长段切分、超时与子进程释放。 |
 
 窗口关闭时删除关联截图数据。设置窗口的关闭操作改为隐藏；最后一个窗口关闭后，托盘和快捷键仍保留。只有显式退出程序才释放全局快捷键、停止原生服务并退出。
 
@@ -126,7 +127,17 @@ Windows 路径通过隐藏 PowerShell 进程调用 WinRT。超过系统 OCR 尺�
 
 离线路径使用独立 Node Worker 承载 Tesseract.js；WebAssembly 核心和 `eng`、`chi_sim` 模型随应用打包，不在运行时下载。原生识别和离线识别分别有超时保护，超时或应用退出时终止相关工作进程；关闭段落栏不终止后台任务，结果继续保存在本张图片的预览状态中。输入检查 PNG 文件头、字节数与尺寸；识别图片最多 96 MB、单边 32768 像素且总像素不超过一亿。
 
-`src/services/translation.ts` 仅定义未来的翻译契约，`translationAvailable = false`。界面入口禁用，没有翻译提供方、网络请求或伪造结果。
+## 中英本地翻译
+
+`src/services/translation.ts` 管理 OCR 段落的翻译状态。用户明确选择 `en-zh` 或 `zh-en`，可翻译全部或单段；逐段进度带请求编号、方向、段落 ID、原文和译文。界面仅接收当前图片、当前请求、同一方向且原文仍一致的结果。编辑原文使对应旧译文失效；重新 OCR、换方向、关闭识别栏或卸载视图会取消在途翻译。已完成译文可复制，保存图片不经过此状态。
+
+主进程只向预览窗口暴露翻译 IPC，并绑定发起窗口的 `webContents.id`。其他窗口不能取消该任务；窗口关闭或渲染进程退出时由 `cancelOwner` 兜底清理。主进程全局仅允许一个任务，避免多窗口同时加载模型造成内存和 CPU 争用。请求校验方向、编号、去重段落 ID、200 段上限、单段 12000 字符及总计 60000 字符。
+
+`translation-worker.cjs` 通过 Electron `utilityProcess` 按需创建独立子进程，使用 Transformers.js 3.8.1 的 Node CJS 后端加载 OPUS-MT ONNX Q8，显式使用 CPU、2 个算子内线程和 1 个算子间线程。主进程和渲染进程不执行模型推理。一次仅保留一个方向的 pipeline，方向切换先释放旧模型；空闲 60 秒后终止子进程。取消、失败、超时或退出都会终止相关子进程，下一次等待旧进程退出后重新创建。原生推理与主程序进程隔离，取消不会在主进程中强杀 ONNX 工作线程。无进度等待限时 120 秒，整批任务最长 10 分钟。
+
+英译中输入包含目标语言标记 `>>cmn_Hans<<`。逐行保留换行，长行优先按句子分割，再按实际 tokenizer 数量切成不超过 192 个输入 token 的片段，禁止 tokenizer 自动截断。生成最多 384 个新 token，检查 EOS 与长度限制，超限时提示拆分而不把截断结果标成完成。纯数字和符号行保留。
+
+模型从固定本地资源目录读取，`allowRemoteModels = false`、`local_files_only = true`，不使用网络回退或用户缓存。两个方向的文件清单、revision 和 SHA-256 固定在 `resources/translation/manifest.json`。`models:prepare` 仅在开发准备阶段从官方 HTTPS 来源下载并校验；`models:check` 在打包前核对所有文件。安装包附带权重、配置、分词器、署名及许可，运行时无需下载。翻译子进程脚本和 ONNX／Sharp 原生依赖使用真实解包路径，Windows 包排除其他平台运行库及未使用的 Web 后端资源。
 
 ## 保存格式
 
@@ -160,13 +171,15 @@ Vue 响应式对象不能直接传入 Electron 的隔离桥。截图确认前显
 
 ## 开发与验证
 
-Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。发布构建由 `electron-builder` 生成 Windows 程序目录与 NSIS 安装包，当前版本 1.2.1，尚未配置代码签名。OCR 模型通过 `extraResources` 放入资源目录；PowerShell、OCR Worker、Tesseract 及其运行依赖通过 `asarUnpack` 提供为可读取文件。
+Vite 负责渲染代码；`scripts/dev.mjs` 启动本机开发服务器与 Electron，并在任一进程退出时清理另一个进程。发布构建由 `electron-builder` 生成 Windows 程序目录与 NSIS 安装包，当前版本 1.3.0，尚未配置代码签名。构建复用项目已安装的 `node_modules/electron/dist` 运行库。OCR 与翻译模型通过 `extraResources` 放入资源目录；PowerShell、OCR 工作线程、翻译子进程及其运行依赖通过 `asarUnpack` 提供为可读取文件。
 
 - `tests/unit/`：坐标、窗口边界、图像校验与编码、序号和箭头、形状边框/控制点/导出、文档历史、马赛克采样、水印布局/缓存/存档、OCR 段落归并/坐标及异常恢复。
 - `tests/e2e/browser.spec.ts`：使用演示图片验证截图选择、属性编辑、无损删除、缩放、多格式导出、水印及 OCR 界面交互。
 - `tests/e2e/electron.spec.ts`：启动真实 Electron 和独立测试窗口，验证原生窗口识别、遮罩复用、系统字体、预览编辑与桌面功能。
 - `scripts/test-packaged.mjs`：读取项目版本后，针对 `release/<版本>/win-unpacked` 中已生成的 EXE 运行原生测试，发现开发环境与打包资源之间的差异。测试使用独立用户数据目录，避免与正在运行的旧版本共用单实例锁或水印存档。具体当轮执行结果见 `docs/VALIDATION.md`。
+- `scripts/verify-translation-service.cjs`、`verify-translation-inference.cjs`：翻译输入与生命周期回归，以及禁止网络调用后的真实模型推理、取消和异常恢复。
+- `scripts/verify-translation.cjs`：真实 Electron OCR 到翻译全流程；传入 EXE 路径可复验打包程序，包含翻译中截图、终止任务子进程后恢复、窗口归属及导出隔离。
 
 浏览器演示位于 `src/demo.ts`，不参与真实 Electron 屏幕捕获。测试产物、构建产物和依赖目录通过 `.gitignore` 排除；源码与文档统一 UTF-8，提交说明使用中文。
 
-当前不支持一次拖动跨多块显示器连续框选，跨屏窗口只截取所在遮罩对应的可见部分；macOS、Linux 未完成原生窗口识别与实测。翻译、图层项目文件、自动保存和截图历史均未实现。架构中的能力描述不替代真实系统与安装包验证。
+当前不支持一次拖动跨多块显示器连续框选，跨屏窗口只截取所在遮罩对应的可见部分；macOS、Linux 未完成原生窗口识别与实测。中英以外翻译、图层项目文件、自动保存和截图历史均未实现。架构中的能力描述不替代真实系统与安装包验证。
