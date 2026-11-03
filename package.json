@@ -1,7 +1,8 @@
 {
   "name": "fanhua-screenshot",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "private": true,
+  "os": ["win32"],
   "description": "繁花有图 · 轻盈、自在的桌面截图与标注工具",
   "author": "繁花有图",
   "type": "module",
@@ -10,11 +11,11 @@
   },
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "node scripts/dev.mjs",
+    "dev": "node scripts/windows-target.cjs && node scripts/dev.mjs",
     "dev:web": "vite --host 127.0.0.1",
     "typecheck": "vue-tsc --noEmit",
-    "build": "npm run typecheck && vite build",
-    "start": "electron .",
+    "build": "node scripts/windows-target.cjs && npm run typecheck && vite build",
+    "start": "node scripts/windows-target.cjs && electron .",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:packaged": "node scripts/test-packaged.mjs",
@@ -24,15 +25,19 @@
     "test:sharing": "node scripts/verify-sharing-ui.cjs",
     "test:localsend": "node scripts/verify-localsend.cjs",
     "test:clipboard": "node scripts/verify-image-clipboard.cjs",
+    "test:windows-target": "node scripts/verify-windows-target.cjs",
+    "test:windows-integration": "node scripts/verify-windows-integration.cjs",
+    "test:context-menu": "node scripts/verify-context-menu.cjs",
     "models:prepare": "node scripts/prepare-translation-models.mjs",
     "models:check": "node scripts/prepare-translation-models.mjs --check",
-    "pack": "npm run models:check && npm run build && electron-builder --dir",
-    "dist": "npm run models:check && npm run build && electron-builder --win nsis"
+    "pack": "node scripts/windows-target.cjs && npm run models:check && npm run build && electron-builder --win --x64 --dir",
+    "dist": "node scripts/windows-target.cjs && npm run models:check && npm run build && electron-builder --win nsis --x64"
   },
   "dependencies": {
     "@huggingface/transformers": "3.8.1",
     "ant-design-vue": "^4.2.6",
     "lucide-vue-next": "^1.0.0",
+    "sharp": "0.34.5",
     "tesseract.js": "^7.0.0",
     "vue": "^3.5.13"
   },
@@ -51,6 +56,7 @@
     "appId": "cn.fanhua.screenshot",
     "productName": "繁花有图",
     "electronDist": "node_modules/electron/dist",
+    "beforePack": "scripts/windows-target.cjs",
     "directories": {
       "output": "release/${version}"
     },
@@ -103,13 +109,12 @@
       }
     ],
     "win": {
-      "target": [
-        "nsis"
-      ],
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
       "icon": "build/icon.ico",
       "artifactName": "Fanhua-Screenshot-${version}-Setup.${ext}"
     },
     "nsis": {
+      "include": "build/installer.nsh",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,

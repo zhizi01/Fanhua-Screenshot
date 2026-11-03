@@ -1,7 +1,6 @@
 'use strict'
 const { app, BrowserWindow, Menu, Tray, ipcMain, globalShortcut, desktopCapturer, screen, nativeImage, dialog, clipboard, ClipboardItem, session, utilityProcess } = require('electron')
 const path = require('node:path')
-const fs = require('node:fs/promises')
 const { randomUUID } = require('node:crypto')
 const { NativeHelper } = require('./native-helper.cjs')
 const { watchCaptureWindow } = require('./capture-lifecycle.cjs')
@@ -9,6 +8,7 @@ const { createFeatureHandlers } = require('./features.cjs')
 const { createTranslationService } = require('./translation.cjs')
 const { createImageClipboard } = require('./image-clipboard.cjs')
 const { createLocalSendService } = require('./localsend.cjs')
+const { EXTENSIONS, parseEditImageArgs, readImageFile } = require('./image-open.cjs')
 const { selectionToPixels, intersectRect } = require('./geometry.cjs')
 
 app.setName('繁花有图')
@@ -321,20 +321,20 @@ async function startCapture(originWindow) {
   }
 }
 
-async function openPreview(image) {
+async function openPreview(image, { editing = false } = {}) {
   if (!image || image.isEmpty()) throw new Error('图片数据为空')
   const size = image.getSize()
   if (size.width * size.height > 100000000) throw new Error('图片尺寸过大，最多支持一亿像素')
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-  const width = Math.min(display.workArea.width, Math.max(420, Math.min(1280, size.width + 32)))
-  const height = Math.min(display.workArea.height, Math.max(260, Math.min(900, size.height + 132)))
+  const width = Math.min(display.workArea.width, Math.max(editing ? 760 : 420, Math.min(1280, size.width + 32)))
+  const height = Math.min(display.workArea.height, Math.max(editing ? 500 : 260, Math.min(900, size.height + 132)))
   const win = makeWindow('preview', {
-    width, height, minWidth: Math.min(360, display.workArea.width), minHeight: Math.min(240, display.workArea.height),
+    width, height, minWidth: Math.min(editing ? 760 : 360, display.workArea.width), minHeight: Math.min(editing ? 500 : 240, display.workArea.height),
     x: Math.round(display.workArea.x + (display.workArea.width - width) / 2),
     y: Math.round(display.workArea.y + (display.workArea.height - height) / 2),
   })
   previews.set(win.webContents.id, {
-    id: randomUUID(), dataUrl: image.toDataURL(), width: size.width, height: size.height, createdAt: new Date().toISOString(),
+    id: randomUUID(), dataUrl: image.toDataURL(), width: size.width, height: size.height, createdAt: new Date().toISOString(), initialEditing: editing,
   })
   try {
     await loadView(win, 'preview')
@@ -345,14 +345,20 @@ async function openPreview(image) {
 async function openImage(parent) {
   const options = {
     title: '打开图片 · 繁花有图', properties: ['openFile'],
-    filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }],
+    filters: [{ name: '图片', extensions: EXTENSIONS }],
   }
   const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
   if (result.canceled || !result.filePaths[0]) return
-  const stat = await fs.stat(result.filePaths[0])
-  if (stat.size > 96 * 1024 * 1024) throw new Error('图片文件过大，请选择小于 96 MB 的图片')
-  const image = nativeImage.createFromPath(result.filePaths[0])
-  await openPreview(image)
+  await openPreview(await readImageFile(result.filePaths[0], nativeImage))
+}
+
+async function handleLaunch(argv, secondary = false) {
+  const file = parseEditImageArgs(argv)
+  if (file) {
+    const image = await readImageFile(file, nativeImage)
+    if (captureSession) finishSession(captureSession)
+    await openPreview(image, { editing: true })
+  } else if (secondary || argv.includes('--show-window')) await openDashboard()
 }
 
 function trustedHandler(channel, views, callback) {
@@ -455,9 +461,14 @@ function installIpc() {
   trustedHandler('watermark:delete-preset', ['preview'], (_win, id) => features.deleteWatermarkPreset(id))
 }
 
-if (!app.requestSingleInstanceLock()) app.quit()
+// Chromium can reorder Windows commandLine arguments before second-instance.
+// Preserve the original flag/value pairs through Electron's additionalData.
+if (!app.requestSingleInstanceLock({ launchArgs: process.argv })) app.quit()
 else {
-  app.on('second-instance', () => void openDashboard().catch(showError))
+  app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
+    const launchArgs = Array.isArray(additionalData?.launchArgs) ? additionalData.launchArgs : argv
+    void app.whenReady().then(() => handleLaunch(launchArgs, true)).catch(showError)
+  })
   app.whenReady().then(async () => {
     if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
@@ -472,7 +483,7 @@ else {
     screen.on('display-added', displaysChanged)
     screen.on('display-metrics-changed', displaysChanged)
     warmOverlays()
-    if (process.argv.includes('--show-window')) await openDashboard()
+    await handleLaunch(process.argv)
   }).catch(showError)
   app.on('window-all-closed', () => { /* Keep the tray and global shortcut alive. */ })
   app.on('activate', () => void openDashboard().catch(showError))
