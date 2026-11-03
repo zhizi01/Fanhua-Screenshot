@@ -2,9 +2,10 @@
 const fs = require('node:fs/promises')
 const path = require('node:path')
 const { randomUUID } = require('node:crypto')
+const { DEFAULT_SHORTCUT, normalizeShortcut } = require('./shortcut.cjs')
 
 const DEFAULT_SETTINGS = Object.freeze({
-  startupNotification: true, contextMenuEnabled: false, captureOpenEditor: false,
+  startupNotification: true, contextMenuEnabled: false, captureOpenEditor: false, captureShortcut: DEFAULT_SHORTCUT,
   ocrLanguage: 'auto', translationDirection: 'en-zh', imageFormat: 'png', imageQuality: 92, pdfScope: 'all',
   editor: Object.freeze({ font: 'Microsoft YaHei UI', size: 28, color: '#ef5c68', markerStyle: 'number', markerHeadSize: 50, arrowLineWidth: 4, arrowHeadSize: 22, shapeLineWidth: 3, shapeBorderStyle: 'solid', mosaicStrength: 18 }),
 })
@@ -28,20 +29,26 @@ const validators = {
 
 function validatePatch(patch) {
   if (!record(patch)) throw new Error('设置内容无效')
+  const clean = {}
   for (const key of Object.keys(patch)) {
-    if (key === 'editor') {
+    if (key === 'captureShortcut') clean.captureShortcut = normalizeShortcut(patch[key])
+    else if (key === 'editor') {
       if (!record(patch.editor)) throw new Error('标注默认值无效')
       for (const field of Object.keys(patch.editor)) {
         if (!Object.hasOwn(editorValidators, field) || !editorValidators[field](patch.editor[field])) throw new Error(`标注设置 ${field} 超出支持范围`)
       }
-    } else if (!Object.hasOwn(validators, key) || !validators[key](patch[key])) throw new Error(`设置 ${key} 无效或超出支持范围`)
+      clean.editor = clone(patch.editor)
+    } else {
+      if (!Object.hasOwn(validators, key) || !validators[key](patch[key])) throw new Error(`设置 ${key} 无效或超出支持范围`)
+      clean[key] = patch[key]
+    }
   }
-  return clone(patch)
+  return clean
 }
 
 function merge(current, patch) { return { ...current, ...patch, editor: { ...current.editor, ...patch.editor } } }
 
-function createSettingsStore({ directory, contextMenu, fileSystem = fs, onChanged = () => {} }) {
+function createSettingsStore({ directory, contextMenu, shortcut, fileSystem = fs, onChanged = () => {} }) {
   const file = path.join(directory, 'settings.json')
   let value = clone(DEFAULT_SETTINGS), ready, tail = Promise.resolve(), loadError = '', stopping = false
 
@@ -98,19 +105,31 @@ function createSettingsStore({ directory, contextMenu, fileSystem = fs, onChange
       await initialize()
       if (stopping) throw new Error('应用正在退出，无法修改设置')
       const next = merge(value, clean)
-      let transaction
+      const previous = value, transactions = []
+      let phase = 'prepare', persisted = false
       try {
-        if (Object.hasOwn(clean, 'contextMenuEnabled')) transaction = await contextMenu.beginChange(clean.contextMenuEnabled)
+        if (Object.hasOwn(clean, 'contextMenuEnabled')) transactions.push(await contextMenu.beginChange(clean.contextMenuEnabled))
+        if (Object.hasOwn(clean, 'captureShortcut')) {
+          if (!shortcut) throw new Error('截图快捷键服务尚未准备完成')
+          transactions.push(await shortcut.beginChange(clean.captureShortcut))
+        }
+        phase = 'persist'
         await persist(next)
+        persisted = true; phase = 'commit'
+        for (const transaction of transactions) await transaction.commit?.()
       } catch (error) {
-        let rollbackError
-        if (transaction) { try { await transaction.rollback() } catch (failure) { rollbackError = failure } }
-        if (rollbackError) {
-          loadError = '设置未保存，且右键菜单未能完全恢复；请查看右键菜单实际状态后重试'
+        const rollbackErrors = []
+        for (const transaction of [...transactions].reverse()) {
+          try { await transaction.rollback() } catch (failure) { rollbackErrors.push(failure) }
+        }
+        if (persisted) { try { await persist(previous) } catch (failure) { rollbackErrors.push(failure) } }
+        if (rollbackErrors.length) {
+          loadError = '设置未能完全恢复；请检查快捷键、右键菜单及配置文件的实际状态后重试'
           throw new Error(loadError)
         }
-        if (transaction) throw new Error('设置保存失败，右键菜单已恢复；请检查设置目录权限和磁盘空间')
-        if (Object.hasOwn(clean, 'contextMenuEnabled')) throw error
+        if (phase === 'prepare') throw new Error(`${error instanceof Error ? error.message : '无法修改系统设置'}${transactions.length ? '；其他系统设置已恢复' : ''}`)
+        if (phase === 'commit') throw new Error(`设置未生效，原配置及系统设置已恢复：${error instanceof Error ? error.message : '快捷键切换失败'}`)
+        if (transactions.length) throw new Error('设置保存失败，原系统设置已恢复；请检查设置目录权限和磁盘空间')
         throw new Error('设置保存失败，请检查设置目录权限和磁盘空间')
       }
       value = next; loadError = ''

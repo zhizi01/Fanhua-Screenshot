@@ -14,11 +14,11 @@ const { createSettingsStore } = require('./settings.cjs')
 const { createContextMenuService } = require('./context-menu.cjs')
 const { createStartupNotifier } = require('./startup-notification.cjs')
 const { createLoginItemService } = require('./login-item.cjs')
+const { createShortcutService, formatShortcut } = require('./shortcut.cjs')
 const { selectionToPixels, intersectRect } = require('./geometry.cjs')
 
 app.setName('繁花有图')
 const APP_ID = 'cn.fanhua.screenshot'
-const SHORTCUT = 'Alt+A'
 const devUrl = !app.isPackaged && process.env.VITE_DEV_SERVER_URL
 const helper = new NativeHelper()
 const managedWindows = new Map()
@@ -30,7 +30,8 @@ const imageClipboard = createImageClipboard({ clipboard, ClipboardItem, nativeIm
 const localSend = createLocalSendService({ app, dialog, nativeImage })
 const pdfService = createPdfService({ app, dialog })
 const contextMenu = createContextMenuService({ app })
-const settingsStore = createSettingsStore({ directory: app.getPath('userData'), contextMenu, onChanged: broadcastSettings })
+const shortcutService = createShortcutService({ globalShortcut, onCapture: () => void startCapture().catch(showError), onChanged: updateTray })
+const settingsStore = createSettingsStore({ directory: app.getPath('userData'), contextMenu, shortcut: shortcutService, onChanged: broadcastSettings })
 const loginItem = createLoginItemService({ app })
 const translation = createTranslationService({
   modelRoot: app.isPackaged ? path.join(process.resourcesPath, 'translation') : path.join(__dirname, '..', 'resources', 'translation'),
@@ -42,7 +43,6 @@ let tray = null
 let captureSession = null
 let quitting = false
 let shutdownReady = false
-let shortcutRegistered = false
 let poolRefreshTimer = null
 
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
@@ -169,24 +169,24 @@ function showError(error) {
 
 function updateTray() {
   if (!tray) return
-  tray.setToolTip(`繁花有图 · ${shortcutRegistered ? 'Alt + A 截图' : '快捷键未启用'}`)
+  const { shortcut, shortcutRegistered } = shortcutService.getState()
+  const label = formatShortcut(shortcut)
+  tray.setToolTip(`繁花有图 · ${label} ${shortcutRegistered ? '截图' : '未启用'}`)
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '开始截图', accelerator: SHORTCUT, click: () => void startCapture().catch(showError) },
+    { label: '开始截图', accelerator: shortcut, click: () => void startCapture().catch(showError) },
     { label: '设置…', click: () => void openSettings().catch(showError) },
     { label: '打开图片 / PDF…', click: () => void openImage().catch(showError) },
     { type: 'separator' },
-    { label: shortcutRegistered ? 'Alt + A 已启用' : 'Alt + A 未启用 · 点击重试', enabled: !shortcutRegistered, click: registerShortcut },
+    { label: shortcutRegistered ? `${label} 已启用` : `${label} 未启用 · 点击重试`, enabled: !shortcutRegistered, click: () => {
+      try { registerShortcut() } catch (error) { showError(error) }
+    } },
     { type: 'separator' },
     { label: '退出繁花有图', click: () => app.quit() },
   ]))
 }
 
 function registerShortcut() {
-  try {
-    if (globalShortcut.isRegistered(SHORTCUT)) shortcutRegistered = true
-    else shortcutRegistered = globalShortcut.register(SHORTCUT, () => void startCapture().catch(showError))
-  } catch { shortcutRegistered = false }
-  updateTray()
+  shortcutService.retry()
 }
 
 function broadcastSettings(settings) {
@@ -203,7 +203,7 @@ async function appState() {
   catch (error) { contextMenuState = { available: false, enabled: false, registered: 0, total: 6, legacyMachine: false, conflict: false, reason: error instanceof Error ? error.message : '无法读取右键菜单状态' } }
   const login = loginItem.getState()
   return {
-    shortcut: SHORTCUT, shortcutRegistered,
+    ...shortcutService.getState(),
     launchAtLogin: login.enabled, ...(login.reason ? { launchAtLoginReason: login.reason } : {}), version: app.getVersion(), platform: process.platform, isPackaged: app.isPackaged,
     contextMenu: contextMenuState, ...(settingsStore.getError() ? { settingsError: settingsStore.getError() } : {}),
   }
@@ -534,14 +534,14 @@ else {
     void localSend.initialize().catch(() => { /* Sharing retries cleanup without blocking tray startup. */ })
     tray = new Tray(createIcon())
     tray.on('double-click', () => void openSettings().catch(showError))
-    registerShortcut()
+    shortcutService.initialize(settingsStore.snapshot().captureShortcut)
     void helper.start().catch(() => { /* Manual area capture remains available. */ })
     screen.on('display-removed', displaysChanged)
     screen.on('display-added', displaysChanged)
     screen.on('display-metrics-changed', displaysChanged)
     warmOverlays()
     startupNotifier = createStartupNotifier({ Notification, openSettings, icon: createIcon(), onError: error => console.warn('启动通知未显示:', error) })
-    startupNotifier.show({ enabled: settingsStore.snapshot().startupNotification, shortcutRegistered })
+    startupNotifier.show({ enabled: settingsStore.snapshot().startupNotification, ...shortcutService.getState() })
   })
   app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
     const launchArgs = Array.isArray(additionalData?.launchArgs) ? additionalData.launchArgs : argv
@@ -563,11 +563,14 @@ else {
     clearTimeout(poolRefreshTimer)
     void features.dispose()
     void translation.dispose()
-    globalShortcut.unregisterAll()
     if (tray) tray.destroy()
     tray = null
     void Promise.allSettled([pdfService.dispose(), settingsStore.dispose()]).then(results => {
       for (const result of results) if (result.status === 'rejected') console.error(result.reason)
-    }).finally(() => { shutdownReady = true; app.quit() })
+    }).finally(() => {
+      try { shortcutService.dispose() } catch (error) { console.error(error) }
+      try { globalShortcut.unregisterAll() } catch (error) { console.error(error) }
+      shutdownReady = true; app.quit()
+    })
   })
 }

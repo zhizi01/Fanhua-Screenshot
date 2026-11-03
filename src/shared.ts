@@ -24,6 +24,7 @@ export interface Screenshot {
 export interface AppState {
   shortcut: string
   shortcutRegistered: boolean
+  shortcutReason?: string
   launchAtLogin: boolean
   launchAtLoginReason?: string
   version: string
@@ -46,6 +47,7 @@ export interface EditorPreferences {
   mosaicStrength: number
 }
 export interface AppSettings {
+  captureShortcut: string
   startupNotification: boolean
   contextMenuEnabled: boolean
   captureOpenEditor: boolean
