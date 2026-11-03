@@ -47,9 +47,23 @@ export function isDrag(start: Point, end: Point, threshold = 4): boolean {
   return Math.hypot(end.x - start.x, end.y - start.y) >= threshold
 }
 
-export function pixelSize(rect: Rect, width: number, height: number, pixelWidth: number, pixelHeight: number) {
+/** Use the same endpoint rounding as the main process's selectionToPixels. */
+export function pixelRect(rect: Rect, width: number, height: number, pixelWidth: number, pixelHeight: number): Rect {
+  const left = Math.max(0, Math.min(width, rect.x))
+  const top = Math.max(0, Math.min(height, rect.y))
+  const right = Math.max(left, Math.min(width, rect.x + rect.width))
+  const bottom = Math.max(top, Math.min(height, rect.y + rect.height))
+  const x = Math.floor(left * pixelWidth / width)
+  const y = Math.floor(top * pixelHeight / height)
   return {
-    width: Math.max(1, Math.round(rect.width * pixelWidth / width)),
-    height: Math.max(1, Math.round(rect.height * pixelHeight / height)),
+    x,
+    y,
+    width: Math.min(pixelWidth, Math.ceil(right * pixelWidth / width)) - x,
+    height: Math.min(pixelHeight, Math.ceil(bottom * pixelHeight / height)) - y,
   }
+}
+
+export function pixelSize(rect: Rect, width: number, height: number, pixelWidth: number, pixelHeight: number) {
+  const pixels = pixelRect(rect, width, height, pixelWidth, pixelHeight)
+  return { width: pixels.width, height: pixels.height }
 }

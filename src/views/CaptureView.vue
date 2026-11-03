@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Aperture, Check, Crosshair, LoaderCircle, Maximize2, MousePointer2, X } from 'lucide-vue-next'
 import type { CaptureContext, Rect, Screenshot, WindowRegion } from '../shared'
 import { getDemoCaptureContext } from '../demo'
-import { clampPoint, dragRect, isDrag, pixelSize, windowAtPoint } from '../capture/geometry'
+import { clampPoint, dragRect, isDrag, pixelRect, pixelSize, windowAtPoint } from '../capture/geometry'
 import type { Point } from '../capture/geometry'
 
 const context = ref<CaptureContext | null>(null)
@@ -71,6 +71,7 @@ function onPointerMove(event: PointerEvent) {
   const point = eventPoint(event)
   pointer.value = point
   if (start.value) {
+    if (event.pointerId !== activePointerId.value || !(event.buttons & 1)) return
     if (isDrag(start.value, point)) dragged.value = true
     if (dragged.value) selected.value = dragRect(start.value, point, context.value.width, context.value.height)
   } else {
@@ -92,7 +93,7 @@ function onPointerDown(event: PointerEvent) {
 }
 
 async function onPointerUp(event: PointerEvent) {
-  if (event.button !== 0 || !start.value || !context.value || busy.value) return
+  if (event.button !== 0 || event.pointerId !== activePointerId.value || !start.value || !context.value || busy.value) return
   const point = eventPoint(event)
   const wasDrag = dragged.value || isDrag(start.value, point)
   const rect = wasDrag
@@ -127,18 +128,20 @@ async function capture(rect: Rect) {
   error.value = ''
   try {
     if (window.fanhua) {
-      await window.fanhua.completeCapture(rect)
+      // A hovered window comes from a Vue reactive proxy. Electron's context
+      // bridge can only clone plain data, so explicitly copy the numeric fields.
+      await window.fanhua.completeCapture({ x: rect.x, y: rect.y, width: rect.width, height: rect.height })
     } else {
       const c = context.value
       const img = new Image()
       img.src = c.dataUrl
       await img.decode()
-      const scaleX = img.naturalWidth / c.width
-      const scaleY = img.naturalHeight / c.height
+      const pixels = pixelRect(rect, c.width, c.height, img.naturalWidth, img.naturalHeight)
+      if (pixels.width < 1 || pixels.height < 1) throw new Error('请选择至少 1 × 1 的截图区域')
       const canvas = document.createElement('canvas')
-      canvas.width = Math.max(1, Math.round(rect.width * scaleX))
-      canvas.height = Math.max(1, Math.round(rect.height * scaleY))
-      canvas.getContext('2d')!.drawImage(img, rect.x * scaleX, rect.y * scaleY, rect.width * scaleX, rect.height * scaleY, 0, 0, canvas.width, canvas.height)
+      canvas.width = pixels.width
+      canvas.height = pixels.height
+      canvas.getContext('2d')!.drawImage(img, pixels.x, pixels.y, pixels.width, pixels.height, 0, 0, canvas.width, canvas.height)
       const screenshot: Screenshot = { id: crypto.randomUUID(), dataUrl: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height, createdAt: new Date().toISOString() }
       sessionStorage.setItem('fanhua:demo-screenshot', JSON.stringify(screenshot))
       location.search = '?view=preview'

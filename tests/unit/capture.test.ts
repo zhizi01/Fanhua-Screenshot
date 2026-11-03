@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampPoint, clipRect, containsPoint, dragRect, isDrag, pixelSize, windowAtPoint } from '../../src/capture/geometry'
+import { clampPoint, clipRect, containsPoint, dragRect, isDrag, pixelRect, pixelSize, windowAtPoint } from '../../src/capture/geometry'
 import type { WindowRegion } from '../../src/shared'
 
 describe('截图选区的屏幕局部坐标', () => {
@@ -22,6 +22,21 @@ describe('截图选区的屏幕局部坐标', () => {
   it('使用真实截图尺寸换算高 DPI 像素而不假定整数缩放', () => {
     expect(pixelSize({ x: 20, y: 30, width: 180, height: 90 }, 1536, 864, 1920, 1080))
       .toEqual({ width: 225, height: 113 })
+  })
+
+  it('150% DPI 下标签与裁剪共同覆盖小数选区端点，避免少显示一像素', () => {
+    const rect = { x: 10.2, y: 20.4, width: 100.1, height: 80.2 }
+    expect(pixelRect(rect, 1920, 1080, 2880, 1620))
+      .toEqual({ x: 15, y: 30, width: 151, height: 121 })
+    expect(pixelSize(rect, 1920, 1080, 2880, 1620))
+      .toEqual({ width: 151, height: 121 })
+  })
+
+  it('像素端点取整仍夹紧在真实图像边界，演示裁剪不会补出透明像素', () => {
+    expect(pixelRect({ x: 1919.5, y: 1079.5, width: 5, height: 5 }, 1920, 1080, 2880, 1620))
+      .toEqual({ x: 2879, y: 1619, width: 1, height: 1 })
+    expect(pixelRect({ x: -2.2, y: -2.2, width: 5.2, height: 5.2 }, 1920, 1080, 2880, 1620))
+      .toEqual({ x: 0, y: 0, width: 5, height: 5 })
   })
 })
 
