@@ -1,6 +1,5 @@
 'use strict'
 const { app, BrowserWindow, Menu, Tray, ipcMain, globalShortcut, desktopCapturer, screen, nativeImage, dialog, clipboard, ClipboardItem, session, utilityProcess } = require('electron')
-const { Blob } = require('node:buffer')
 const path = require('node:path')
 const fs = require('node:fs/promises')
 const { randomUUID } = require('node:crypto')
@@ -8,7 +7,9 @@ const { NativeHelper } = require('./native-helper.cjs')
 const { watchCaptureWindow } = require('./capture-lifecycle.cjs')
 const { createFeatureHandlers } = require('./features.cjs')
 const { createTranslationService } = require('./translation.cjs')
-const { selectionToPixels, intersectRect, decodePngDataUrl } = require('./geometry.cjs')
+const { createImageClipboard } = require('./image-clipboard.cjs')
+const { createLocalSendService } = require('./localsend.cjs')
+const { selectionToPixels, intersectRect } = require('./geometry.cjs')
 
 app.setName('繁花有图')
 const APP_ID = 'cn.fanhua.screenshot'
@@ -20,6 +21,8 @@ const captures = new Map()
 const previews = new Map()
 const overlayPool = new Map()
 const features = createFeatureHandlers({ app, dialog, nativeImage, clipboard, helper })
+const imageClipboard = createImageClipboard({ clipboard, ClipboardItem, nativeImage })
+const localSend = createLocalSendService({ app, dialog, nativeImage })
 const translation = createTranslationService({
   modelRoot: app.isPackaged ? path.join(process.resourcesPath, 'translation') : path.join(__dirname, '..', 'resources', 'translation'),
   forkProcess: (file, options) => utilityProcess.fork(file, [], options),
@@ -431,11 +434,8 @@ function installIpc() {
   })
   trustedHandler('preview:layout', ['preview'], resizePreview)
   trustedHandler('image:save', ['preview'], (win, dataUrl, options) => features.saveImage(win, dataUrl, options))
-  trustedHandler('image:copy', ['preview'], (_win, dataUrl) => {
-    const image = nativeImage.createFromBuffer(decodePngDataUrl(dataUrl))
-    if (image.isEmpty()) throw new Error('图片解码失败')
-    return clipboard.write([new ClipboardItem({ 'image/png': new Blob([image.toPNG()], { type: 'image/png' }) })])
-  })
+  trustedHandler('image:copy', ['preview'], (_win, dataUrl, mode) => imageClipboard.copy(dataUrl, mode))
+  trustedHandler('localsend:share', ['preview'], (win, dataUrl) => localSend.share(win, dataUrl))
   trustedHandler('image:open', normal, openImage)
   trustedHandler('app:fonts', normal, (_win, refresh) => features.getFonts(refresh))
   trustedHandler('ocr:capabilities', ['preview'], () => features.getOcrCapabilities())
@@ -463,6 +463,7 @@ else {
     session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
     session.defaultSession.setPermissionCheckHandler(() => false)
     installIpc()
+    void localSend.initialize().catch(() => { /* Sharing retries cleanup without blocking tray startup. */ })
     tray = new Tray(createIcon())
     tray.on('double-click', () => void openDashboard().catch(showError))
     registerShortcut()

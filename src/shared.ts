@@ -28,6 +28,8 @@ export interface AppState {
 }
 export type ImageFormat = 'png' | 'jpeg' | 'webp' | 'bmp'
 export interface ImageSaveOptions { format: ImageFormat; quality?: number }
+export type ImageCopyMode = 'png' | 'deskflow'
+export interface ImageCopyResult { format: 'png' | 'jpeg'; quality?: number; bytes: number }
 export interface OcrLine { text: string; bounds: Rect }
 export interface OcrParagraph { id: string; text: string; bounds: Rect; lines: OcrLine[] }
 export interface OcrResult { text: string; lines: OcrLine[]; paragraphs: OcrParagraph[]; language: string; width: number; height: number }
@@ -83,7 +85,8 @@ export interface DesktopAPI {
   setEditing(editing: boolean): Promise<void>
   setPreviewLayout(layout: { editing: boolean; ocr: boolean }): Promise<void>
   saveImage(dataUrl: string, options?: ImageSaveOptions): Promise<{ canceled: boolean; filePath?: string }>
-  copyImage(dataUrl: string): Promise<void>
+  copyImage(dataUrl: string, mode?: ImageCopyMode): Promise<ImageCopyResult>
+  shareViaLocalSend(dataUrl: string): Promise<{ canceled: boolean; fileName?: string }>
   openImage(): Promise<void>
   getFonts(refresh?: boolean): Promise<string[]>
   getOcrCapabilities(): Promise<OcrCapabilities>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Button as AButton, InputNumber as AInputNumber, Slider as ASlider, Select as ASelect, message } from 'ant-design-vue'
-import { ArrowUpRight, Check, ChevronDown, Circle, Copy, Download, Flower2, Grip, Image as ImageIcon, Languages, Layers3, Maximize, Minus, MousePointer2, Pencil, Pin, PinOff, Plus, Redo2, RefreshCw, Scan, ScanText, Square, Stamp, Trash2, Type, Undo2, X } from 'lucide-vue-next'
+import { ArrowUpRight, Check, ChevronDown, Circle, Download, Flower2, Grip, Image as ImageIcon, Languages, Layers3, Maximize, Minus, MousePointer2, Pencil, Pin, PinOff, Plus, Redo2, RefreshCw, Scan, ScanText, Square, Stamp, Trash2, Type, Undo2, X } from 'lucide-vue-next'
 import type { ImageFormat, ImageSaveOptions, OcrCapabilities, OcrParagraph, Screenshot, WatermarkConfig } from '../shared'
 import { getDemoScreenshot } from '../demo'
 import { arrowEndpointAt, DocumentHistory, hitTest, imagePoint, markerDiameter, moveLayer, normalizeRect, resizeShape, sequenceLabel, shapeHandleAt, shapeRect, visualLayers, type ArrowLayer, type BorderStyle, type EditorDocument, type Layer, type MosaicLayer, type NumberStyle, type Point, type ShapeHandle, type ShapeLayer, type TextStyle, type Tool } from '../editor/model'
@@ -9,6 +9,7 @@ import { canvasFont, paintArrow, paintShape, renderScene, renderSelection, textM
 import { encodeBmp } from '../editor/export'
 import { defaultWatermark, loadWatermarkImage } from '../watermark/render'
 import SaveExportDialog from '../components/SaveExportDialog.vue'
+import ShareActions from '../components/ShareActions.vue'
 import OcrSidebar from '../components/OcrSidebar.vue'
 import { hitOcrParagraph, clipOcrBounds } from '../ocr/regions'
 import WatermarkPanel from '../components/WatermarkPanel.vue'
@@ -22,6 +23,8 @@ const error = ref('')
 const editing = ref(false)
 const pinned = ref(false)
 const saving = ref(false)
+const copying = ref<'png' | 'deskflow' | null>(null)
+const sharing = ref(false)
 const saved = ref(false)
 const exportOpen = ref(false)
 const ocrOpen = ref(false)
@@ -368,14 +371,30 @@ async function confirmSave(options: ImageSaveOptions) {
   } catch (cause) { message.error(cause instanceof Error ? cause.message : '保存失败，请重试') }
   finally { saving.value = false }
 }
-async function copy() {
-  if (loading.value || error.value) return
+function actionError(cause: unknown, fallback: string) {
+  return cause instanceof Error ? cause.message.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/, '') : fallback
+}
+async function copy(mode: 'png' | 'deskflow' = 'png') {
+  if (loading.value || error.value || copying.value || sharing.value || saving.value) return
+  if (mode === 'deskflow' && !window.fanhua) { message.info('DeskFlow 图片复制需在桌面版运行。'); return }
+  copying.value = mode
   try {
-    const dataUrl = await exportImage()
-    if (window.fanhua) await window.fanhua.copyImage(dataUrl)
+    const dataUrl = await exportImage(mode === 'deskflow' ? 'jpeg' : 'png', mode === 'deskflow' ? 60 : 92)
+    if (window.fanhua) await window.fanhua.copyImage(dataUrl, mode)
     else { const blob = await (await fetch(dataUrl)).blob(); await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]) }
-    message.success('已复制图片')
-  } catch { message.error('复制失败，请使用保存图片') }
+    message.success(mode === 'deskflow' ? '已复制 DeskFlow 图片（JPG 60%）' : '已复制图片')
+  } catch (cause) { message.error(actionError(cause, '复制失败，请使用保存图片')) }
+  finally { copying.value = null }
+}
+async function shareViaLocalSend() {
+  if (loading.value || error.value || sharing.value || copying.value || saving.value) return
+  if (!window.fanhua) { message.info('LocalSend 共享需在桌面版运行。'); return }
+  sharing.value = true
+  try {
+    const result = await window.fanhua.shareViaLocalSend(await exportImage('png'))
+    if (!result.canceled) message.success('已交给 LocalSend，请选择接收设备')
+  } catch (cause) { message.error(actionError(cause, '无法唤起 LocalSend，请重试')) }
+  finally { sharing.value = false }
 }
 async function setOcrOpen(open: boolean) {
   cancelDrag()
@@ -522,7 +541,7 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
       <div class="file-identity"><ImageIcon :size="14" /><span>{{ screenshot ? `${screenshot.width} × ${screenshot.height}` : '读取图片…' }}</span><span v-if="layers.length" class="annotation-count">{{ layers.length }} 个标注</span></div>
       <div class="primary-actions">
         <AButton size="small" type="text" :class="{ 'is-pinned': pinned }" :title="pinned ? '取消置顶' : '固定到屏幕前方'" aria-label="固定窗口" :aria-pressed="pinned" @click="togglePin"><template #icon><PinOff v-if="pinned" :size="15" /><Pin v-else :size="15" /></template><span class="action-label">{{ pinned ? '已固定' : '固定' }}</span></AButton>
-        <AButton size="small" type="text" :disabled="loading || !!error" aria-label="复制图片" title="复制图片 Ctrl+C" @click="copy"><template #icon><Copy :size="15" /></template><span class="action-label">复制</span></AButton>
+        <ShareActions :disabled="loading || !!error || saving" :desktop="isDesktop" :copying="copying" :sharing="sharing" @copy="copy" @share="shareViaLocalSend" />
         <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': ocrOpen }" :aria-pressed="ocrOpen" aria-label="识别文字" title="显示或收起文字识别面板" @click="toggleOcr"><template #icon><ScanText :size="15" /></template><span class="action-label">识别文字</span></AButton>
         <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': ocrOpen && translationState.open }" aria-label="中英翻译" title="在识别段落下显示本地中英译文" @click="showTranslation"><template #icon><Languages :size="15" /></template><span class="action-label">翻译</span></AButton>
         <AButton size="small" type="text" :disabled="loading || !!error" :class="{ 'edit-active': watermark.enabled }" aria-label="水印设置" title="添加文字或图片水印" @click="watermarkOpen = true"><template #icon><Stamp :size="15" /></template><span class="action-label">水印</span></AButton>
@@ -640,9 +659,9 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
 .file-identity > svg { color: #918799; }
 .annotation-count { margin-left: 7px; padding-left: 11px; border-left: 1px solid #e2dfe7; color: #8f8599; }
 .primary-actions { display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
-.primary-actions :deep(.ant-btn) { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 27px; padding: 0 8px; font-size: 11px; border-radius: 4px; box-shadow: none; }
-.primary-actions :deep(.ant-btn .ant-btn-icon) { display: flex; margin: 0; }
-.primary-actions :deep(.ant-btn-primary) { margin-left: 3px; padding: 0 10px; }
+.primary-actions > :deep(.ant-btn) { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 27px; padding: 0 8px; font-size: 11px; border-radius: 4px; box-shadow: none; }
+.primary-actions > :deep(.ant-btn .ant-btn-icon) { display: flex; margin: 0; }
+.primary-actions > :deep(.ant-btn-primary) { margin-left: 3px; padding: 0 10px; }
 .is-pinned, .edit-active { color: #7154bd !important; background: #eee9f8 !important; }
 .editor-toolbar {
   height: 40px;
@@ -762,8 +781,8 @@ onBeforeUnmount(() => { ocrRequest++; window.removeEventListener('keydown', keyD
 }
 @media (max-width: 600px) {
   .action-label { display: none; }
-  .primary-actions :deep(.ant-btn), .primary-actions :deep(.ant-btn-primary) { width: 29px; padding: 0; margin-left: 0; }
-  .primary-actions :deep(.ant-btn > .ant-btn-icon) { margin: 0; }
+  .primary-actions > :deep(.ant-btn), .primary-actions > :deep(.ant-btn-primary) { width: 29px; padding: 0; margin-left: 0; }
+  .primary-actions > :deep(.ant-btn > .ant-btn-icon) { margin: 0; }
   .preview-topbar { padding: 0 7px 0 10px; }
   .editor-toolbar { padding: 0 6px; gap: 3px; }
   .tool-button { padding: 0 5px; gap: 4px; }

@@ -1,6 +1,6 @@
 {
   "name": "fanhua-screenshot",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "繁花有图 · 轻盈、自在的桌面截图与标注工具",
   "author": "繁花有图",
@@ -21,6 +21,9 @@
     "test:translation": "node scripts/verify-translation.cjs",
     "test:translation:service": "node scripts/verify-translation-service.cjs",
     "test:translation:offline": "node scripts/verify-translation-inference.cjs",
+    "test:sharing": "node scripts/verify-sharing-ui.cjs",
+    "test:localsend": "node scripts/verify-localsend.cjs",
+    "test:clipboard": "node scripts/verify-image-clipboard.cjs",
     "models:prepare": "node scripts/prepare-translation-models.mjs",
     "models:check": "node scripts/prepare-translation-models.mjs --check",
     "pack": "npm run models:check && npm run build && electron-builder --dir",
