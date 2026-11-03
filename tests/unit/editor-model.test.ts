@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { EditHistory, hitTest, imagePoint, layerBounds, moveLayer, normalizeRect, sequenceLabel, type Layer, type MosaicLayer } from '../../src/editor/model'
+import { arrowEndpointAt, arrowGeometry, DocumentHistory, EditHistory, hitTest, imagePoint, layerBounds, markerDiameter, moveLayer, normalizeRect, sequenceLabel, type ArrowLayer, type Layer, type MarkerLayer, type MosaicLayer } from '../../src/editor/model'
 import { renderScene } from '../../src/editor/render'
+import { defaultWatermark } from '../../src/watermark/render'
 
 const text: Layer = { id: 't', type: 'text', x: 20, y: 30, text: '批注', font: 'Arial', size: 20, color: '#f00000' }
 const mosaic: MosaicLayer = { id: 'm', type: 'mosaic', x: 10, y: 15, width: 80, height: 40, strength: 20 }
+const arrow: ArrowLayer = { id: 'a', type: 'arrow', x: 20, y: 20, endX: 120, endY: 120, color: '#ef5c68', lineWidth: 4, headSize: 24 }
 
 describe('sequence labels', () => {
   it('supports alphabetic carry after Z and ZZ', () => {
@@ -68,6 +70,70 @@ describe('lossless editing history', () => {
     expect(history.undo()).toEqual([text])
     expect(history.undo()).toEqual([])
     expect(history.canUndo).toBe(false)
+  })
+})
+
+describe('editable arrows and marker heads', () => {
+  it('hits the arrow stroke and filled head without selecting empty bounding-box corners', () => {
+    expect(hitTest([arrow], { x: 70, y: 70 }, 2)?.id).toBe('a')
+    expect(hitTest([arrow], { x: 25, y: 110 }, 2)).toBeUndefined()
+    const geometry = arrowGeometry(arrow)
+    const insideHead = { x: (geometry.end.x + geometry.left.x + geometry.right.x) / 3, y: (geometry.end.y + geometry.left.y + geometry.right.y) / 3 }
+    expect(hitTest([arrow], insideHead, 0)?.id).toBe('a')
+    expect(arrowEndpointAt(arrow, { x: 23, y: 24 }, 5)).toBe('start')
+    expect(arrowEndpointAt(arrow, { x: 120, y: 120 }, 5)).toBe('end')
+    expect(arrowEndpointAt(arrow, { x: 70, y: 70 }, 5)).toBeUndefined()
+  })
+  it('moves and clips both endpoints together, retaining the original direction and length', () => {
+    const moved = moveLayer(arrow, 1000, -1000, 200, 200) as ArrowLayer
+    expect(moved.endX - moved.x).toBe(100)
+    expect(moved.endY - moved.y).toBe(100)
+    const bounds = layerBounds(moved)
+    expect(bounds.x).toBeGreaterThanOrEqual(0)
+    expect(bounds.y).toBeGreaterThanOrEqual(0)
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(200)
+    expect(arrow.x).toBe(20)
+  })
+  it('bounds a short reversed arrow head by its length and handles a zero-length draft', () => {
+    const geometry = arrowGeometry({ ...arrow, x: 120, y: 120, endX: 115, endY: 120, headSize: 160 })
+    expect(geometry.length).toBe(5)
+    expect(geometry.base.x).toBe(119)
+    expect(arrowGeometry({ ...arrow, endX: 20, endY: 20 }).length).toBe(0)
+  })
+  it('changes the sequence head without changing description typography and supports older markers', () => {
+    const marker: MarkerLayer = { ...text, type: 'marker', number: 1, style: 'number', text: '说明', headSize: 80 }
+    expect(markerDiameter(marker)).toBe(80)
+    expect(markerDiameter({ ...marker, size: 80 })).toBe(80)
+    expect(layerBounds(marker).height).toBe(80)
+    const legacy = { ...marker, headSize: undefined }
+    expect(markerDiameter(legacy)).toBeGreaterThanOrEqual(marker.size * 1.8)
+  })
+})
+
+describe('document undo and redo', () => {
+  it('restores watermark changes and arrow deletion in their original order', () => {
+    const watermark = defaultWatermark()
+    const history = new DocumentHistory({ layers: [], watermark })
+    history.commit({ layers: [arrow], watermark })
+    history.commit({ layers: [arrow], watermark: { ...watermark, enabled: true, text: '内部资料' } })
+    history.commit({ layers: [], watermark: { ...watermark, enabled: true, text: '内部资料' } })
+    expect(history.undo().layers).toEqual([arrow])
+    expect(history.undo().watermark).toEqual(watermark)
+    expect(history.redo().watermark.text).toBe('内部资料')
+  })
+  it('takes isolated snapshots while sharing immutable image strings and discards a redo branch', () => {
+    const watermark = { ...defaultWatermark(), imageDataUrl: 'data:image/png;base64,example' }
+    const history = new DocumentHistory({ layers: [], watermark })
+    history.commit({ layers: [arrow], watermark })
+    watermark.opacity = .7
+    history.commit({ layers: [arrow], watermark })
+    const previous = history.undo()
+    expect(previous.watermark.opacity).not.toBe(.7)
+    previous.watermark.text = '外部修改'
+    expect(history.redo().watermark.text).not.toBe('外部修改')
+    history.undo()
+    history.commit({ layers: [mosaic], watermark })
+    expect(history.canRedo).toBe(false)
   })
 })
 

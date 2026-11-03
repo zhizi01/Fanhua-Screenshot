@@ -1,4 +1,6 @@
-import { layerBounds, markerDiameter, sequenceLabel, type Layer, type MosaicLayer } from './model'
+import { arrowGeometry, layerBounds, markerDiameter, sequenceLabel, type ArrowLayer, type Layer, type MosaicLayer } from './model'
+import type { WatermarkConfig } from '../shared'
+import { paintWatermark } from '../watermark/render'
 
 export function canvasFont(font: string, size: number) {
   return `${size}px "${font.replace(/["\\]/g, '')}", "Microsoft YaHei UI", sans-serif`
@@ -24,13 +26,35 @@ export function paintMosaic(context: CanvasRenderingContext2D, source: CanvasIma
   context.restore()
 }
 
-export function renderScene(context: CanvasRenderingContext2D, source: CanvasImageSource, width: number, height: number, layers: Layer[]) {
+export function paintArrow(context: CanvasRenderingContext2D, layer: ArrowLayer) {
+  const g = arrowGeometry(layer)
+  if (g.length < .1) return
+  context.save()
+  context.strokeStyle = layer.color
+  context.fillStyle = layer.color
+  context.lineWidth = layer.lineWidth
+  context.lineCap = 'round'
+  context.beginPath()
+  context.moveTo(g.start.x, g.start.y)
+  context.lineTo(g.base.x, g.base.y)
+  context.stroke()
+  context.beginPath()
+  context.moveTo(g.end.x, g.end.y)
+  context.lineTo(g.left.x, g.left.y)
+  context.lineTo(g.right.x, g.right.y)
+  context.closePath()
+  context.fill()
+  context.restore()
+}
+
+export function renderScene(context: CanvasRenderingContext2D, source: CanvasImageSource, width: number, height: number, layers: Layer[], watermark?: WatermarkConfig) {
   context.clearRect(0, 0, width, height)
   context.drawImage(source, 0, 0, width, height)
   // Privacy regions are always below annotation objects. They only sample source pixels.
   for (const layer of layers) if (layer.type === 'mosaic') paintMosaic(context, source, layer)
   for (const layer of layers) {
     if (layer.type === 'mosaic') continue
+    if (layer.type === 'arrow') { paintArrow(context, layer); continue }
     context.save()
     context.font = canvasFont(layer.font, layer.size)
     context.textBaseline = 'top'
@@ -50,15 +74,23 @@ export function renderScene(context: CanvasRenderingContext2D, source: CanvasIma
       context.fillStyle = luminance > 155 ? '#24202e' : '#ffffff'
       context.textAlign = 'center'
       context.textBaseline = 'middle'
-      context.fillText(sequenceLabel(layer.number, layer.style), layer.x + radius, layer.y + radius + layer.size * .04)
+      const label = sequenceLabel(layer.number, layer.style)
+      let badgeFontSize = diameter * .55
+      context.font = canvasFont(layer.font, badgeFontSize)
+      const labelWidth = context.measureText(label).width
+      if (labelWidth > diameter * .8) badgeFontSize *= diameter * .8 / labelWidth
+      context.font = canvasFont(layer.font, badgeFontSize)
+      context.fillText(label, layer.x + radius, layer.y + radius + badgeFontSize * .04)
       context.textAlign = 'left'
       context.textBaseline = 'top'
+      context.font = canvasFont(layer.font, layer.size)
       context.fillStyle = layer.color
       const textY = layer.y + Math.max(0, (diameter - lines.length * layer.size * 1.4) / 2)
       lines.forEach((line, index) => context.fillText(line, layer.x + diameter + layer.size * .5, textY + index * layer.size * 1.4))
     }
     context.restore()
   }
+  if (watermark?.enabled) paintWatermark(context, width, height, watermark)
 }
 
 export function renderSelection(context: CanvasRenderingContext2D, layer: Layer, scale: number) {
@@ -67,6 +99,17 @@ export function renderSelection(context: CanvasRenderingContext2D, layer: Layer,
   context.save()
   context.strokeStyle = '#8063d5'
   context.lineWidth = 1.5 / scale
+  if (layer.type === 'arrow') {
+    context.setLineDash([5 / scale, 3 / scale])
+    context.beginPath(); context.moveTo(layer.x, layer.y); context.lineTo(layer.endX, layer.endY); context.stroke()
+    context.setLineDash([])
+    for (const point of [{ x: layer.x, y: layer.y }, { x: layer.endX, y: layer.endY }]) {
+      context.fillStyle = '#ffffff'
+      context.beginPath(); context.arc(point.x, point.y, 5 / scale, 0, Math.PI * 2); context.fill(); context.stroke()
+    }
+    context.restore()
+    return
+  }
   context.setLineDash([5 / scale, 3 / scale])
   context.strokeRect(bounds.x - pad, bounds.y - pad, bounds.width + pad * 2, bounds.height + pad * 2)
   context.restore()

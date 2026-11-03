@@ -103,7 +103,7 @@ onBeforeUnmount(() => {
       <div class="app-title">
         <FlowerLogo :size="24" />
         <h1>繁花有图</h1>
-        <span class="version">{{ state?.version || '1.0.0' }}</span>
+        <span class="version">{{ state?.version || '1.1.0' }}</span>
       </div>
       <button class="icon-button danger no-drag" aria-label="隐藏到系统托盘" title="关闭设置，继续在后台运行" @click="hideWindow">
         <X :size="17" />
